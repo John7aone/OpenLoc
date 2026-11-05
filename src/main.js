@@ -57,9 +57,11 @@ window.toggleTheme = function() {
 window.setTheme = function(v) {
   const theme = normalizeTheme(v);
   document.documentElement.setAttribute("data-theme", theme);
-  const label = theme === "dark" ? "切换浅色主题" : "切换深色主题";
-  const a = document.getElementById("themeBtn"); if (a) a.textContent = label;
-  const b = document.getElementById("themeBtn2"); if (b) b.textContent = label;
+  const label = theme === "dark" ? "切换到浅色" : "切换到深色";
+  for (const id of ["themeBtn", "themeBtn2"]) {
+    const el = document.getElementById(id);
+    if (el) el.setAttribute("aria-label", label);
+  }
   try { localStorage.setItem("openloc-theme", theme); } catch (e) {}
 };
 function setText(id, text) { const n = document.getElementById(id); if (n) n.textContent = text; }

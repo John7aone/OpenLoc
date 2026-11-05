@@ -21,9 +21,8 @@
 <button type="button" data-page="settings" onclick="tab('settings',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>设置</button>
 </nav>
 <div class="sidebar-foot">
-<button id="themeBtn" type="button" onclick="toggleTheme()">切换深色主题</button>
-<div class="muted small">点一下换深色 / 浅色，选完会自动记住。</div>
-<button onclick="takeShot()">截屏保存</button><div id="shotmsg" class="muted small"></div>
+<button id="themeBtn" class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="切换到深色"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 0 0 11.5 11.5z"/></svg></button>
+<button type="button" onclick="takeShot()">截屏保存</button><div id="shotmsg" class="muted small"></div>
 </div>
 </aside>
 
@@ -174,7 +173,7 @@
 <button onclick="genVid()">生成扩散视频</button><div id="vidmsg" class="muted"></div></div>
 
 <div id="settings" class="tab card"><h2>设置</h2>
-<div class="mcard"><b>主题风格</b><p class="muted">主题存在本机，下次打开 OpenLoc 还是你选的那个。深色是海军蓝底、抬升卡片；浅色是灰白底。主色是蓝。</p><button id="themeBtn2" type="button" onclick="toggleTheme()">切换深色主题</button></div>
+<div class="mcard"><b>主题风格</b><p class="muted">主题存在本机，下次打开 OpenLoc 还是你选的那个。深色是海军蓝底、抬升卡片；浅色是灰白底。主色是蓝。侧栏底部的图标也可以切换：深色是太阳，浅色是月亮。</p><button id="themeBtn2" class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="切换到深色"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 0 0 11.5 11.5z"/></svg></button></div>
 <div class="mcard"><b>模型存放</b><p class="muted">模型默认存在程序旁的 data/models/。已下载的模型不会自动搬家。</p><div class="row"><button onclick="openModelsFolder()">打开模型文件夹</button><button class="sec" onclick="openDataFolder()">打开数据目录</button></div></div>
 <div class="mcard"><b>界面语言</b><select id="langSel" onchange="saveLang(this.value)"><option value="system">跟随系统（简体中文）</option><option value="zh">简体中文</option><option value="en">English</option></select><p class="muted" id="langmsg">界面目前只有简体中文，选 English 暂不翻译，下一版再做英文界面。</p></div>
 <div class="mcard"><b>显卡</b><p class="muted" id="gpu-info">检测中…</p><div class="row"><button onclick="loadHw()">重新检测</button><button class="sec" onclick="alert('手动指定显卡：目前只支持自动检测到的 NVIDIA 显卡，检测不到时请在运行页用 CPU 模式。')">手动指定</button></div></div>

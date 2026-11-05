@@ -582,3 +582,40 @@ nav button.on:hover {
   .modelrow { flex-direction: column; align-items: stretch; }
   .modelrow .mright { width: 100%; align-items: stretch; }
 }
+
+/* 侧栏底部主题开关：线框太阳 / 月亮，无文字、无底、无边。 */
+button.theme-toggle,
+.sidebar-foot button.theme-toggle {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  margin: 2px 0 2px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: #4e5d74;
+}
+html[data-theme="dark"] button.theme-toggle,
+html[data-theme="black"] button.theme-toggle { color: #c5cedb; }
+button.theme-toggle:hover:not(:disabled),
+.sidebar-foot button.theme-toggle:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  filter: none;
+  color: var(--text);
+}
+button.theme-toggle svg {
+  width: 22px;
+  height: 22px;
+  display: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+html[data-theme="dark"] button.theme-toggle .icon-sun,
+html[data-theme="black"] button.theme-toggle .icon-sun,
+html[data-theme="light"] button.theme-toggle .icon-moon { display: block; }
