@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+// Tauri 2 withGlobalTauri: use the injected global API, no bundler needed.
+const invoke = (...args) => window.__TAURI__.core.invoke(...args);
 window.tab = function(id, btn) {
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("on"));
   document.getElementById(id).classList.add("on");
