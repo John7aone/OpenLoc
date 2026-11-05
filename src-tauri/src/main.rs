@@ -103,8 +103,10 @@ fn get_hardware() -> Hardware {
     }
 }
 
-fn fit_hint(params: &str, mem_gb: f64) -> String {
+fn fit_hint(params: &str, mem_gb: f64, vram_gb: f64) -> String {
     // 粗略估算：Q4 量化大约每 10 亿参数占 0.6GB，加上运行开销。
+    // 关键：能不能流畅跑，看的是显存，不是内存。模型放不进显存，
+    // 只能分到内存里跑，速度会慢很多。内存只决定“能不能跑起来”。
     let est: f64 = params
         .split_whitespace()
         .next()
@@ -112,12 +114,12 @@ fn fit_hint(params: &str, mem_gb: f64) -> String {
         .unwrap_or(4.0)
         * 0.6
         + 2.0;
-    if mem_gb >= est * 1.5 {
-        format!("适合：估计需要约 {:.0}GB 内存，你的内存充足", est)
-    } else if mem_gb >= est {
-        format!("勉强：估计需要约 {:.0}GB 内存，可能会比较慢", est)
+    if vram_gb > 0.0 && est <= vram_gb * 0.9 {
+        format!("流畅：估计约 {:.0}GB，能放进 {:.0}GB 显存", est, vram_gb)
+    } else if est <= mem_gb {
+        format!("能跑：估计约 {:.0}GB，放不进 {:.0}GB 显存，会分到内存，速度较慢", est, vram_gb)
     } else {
-        format!("不建议：估计需要约 {:.0}GB 内存，你的内存可能不够", est)
+        format!("不建议：估计约 {:.0}GB，你的内存可能不够", est)
     }
 }
 
@@ -177,7 +179,7 @@ fn get_catalog_with_fit() -> Vec<serde_json::Value> {
             serde_json::json!({
                 "id": m.id, "name": m.name, "repo": m.repo,
                 "params": m.params, "desc": m.desc, "cat": m.cat,
-                "fit": fit_hint(&m.params, hw.memory_total_gb),
+                "fit": fit_hint(&m.params, hw.memory_total_gb, hw.gpu_vram_gb),
             })
         })
         .collect()

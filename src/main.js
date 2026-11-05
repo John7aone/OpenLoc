@@ -31,9 +31,8 @@ window.loadHw = async function() {
   document.getElementById("gpu-status").textContent = "显卡状态：● " + h.gpu + (h.gpu_vram_gb ? "（" + h.gpu_vram_gb.toFixed(1) + "GB）" : "");
   const vram = h.gpu_vram_gb || 0;
   const smooth = vram >= 16 ? 14 : vram >= 8 ? 8 : vram >= 6 ? 7 : vram >= 4 ? 4 : 2;
-  const best = smooth >= 8 ? "Qwen 2.5 7B（约 4.7GB，当前最佳匹配）" : smooth >= 4 ? "Qwen 2.5 3B 或 Gemma 4 E4B" : "Qwen 2.5 0.5B（先跑起来再说）";
   document.getElementById("rec-title").textContent = "流畅运行 " + smooth + "B 以内的模型";
-  document.getElementById("rec-desc").textContent = "当前最佳匹配：" + best + "。显存不够时，模型会分到内存里跑，速度会变慢，这是正常的。";
+  document.getElementById("rec-desc").textContent = "推荐按显存算，不是按内存算：模型能放进显存才流畅，放不进显存只能分到内存，速度会变慢。右边的推荐里，标“流畅”的才能放进你的显存。";
   document.getElementById("vram-text").textContent = vram ? vram.toFixed(1) + " GB 显存" : "未检测到独立显存，走 CPU / 内存模式";
   document.getElementById("vram-bar").style.width = vram ? Math.min(100, vram / 16 * 100) + "%" : "8%";
   document.getElementById("mem-text").textContent = h.memory_total_gb.toFixed(0) + " GB，可用 " + h.memory_gb.toFixed(0) + " GB";
@@ -53,12 +52,12 @@ window.loadHw = async function() {
   const gi = document.getElementById("gpu-info"); if (gi) gi.textContent = h.gpu + " · " + (vram ? vram.toFixed(1) + " GB" : "无独立显存") + "，自动检测，推理用 CUDA（N 卡）。";
   loadRecommended();
 };
-function fitLabel(fit) { if (fit.startsWith("适合")) return "流畅"; if (fit.startsWith("勉强")) return "能跑"; return "较慢"; }
+function fitLabel(fit) { if (fit.startsWith("流畅")) return "流畅"; if (fit.startsWith("能跑")) return "能跑"; return "较慢"; }
 window.loadRecommended = async function() {
   const el = document.getElementById("recmodels"); if (!el) return;
   try {
     const models = await invoke("get_catalog_with_fit");
-    const good = models.filter(m => m.fit.startsWith("适合")).slice(0, 3);
+    const good = models.filter(m => m.fit.startsWith("流畅")).slice(0, 3);
     const list = good.length ? good : models.slice(0, 3);
     const top = list[0];
     el.innerHTML = `<div class="feat"><div class="row"><b style="font-size:18px">${top.name}</b><span class="pill-fit">${fitLabel(top.fit)}</span><span class="muted small">主推</span></div><div class="mdesc">${top.desc}</div><div class="statrow"><div class="stat"><div class="k">参数</div><div class="v">${top.params}</div></div><div class="stat"><div class="k">适合程度</div><div class="v">${top.fit}</div></div><div class="stat"><div class="k">来源</div><div class="v">${top.repo}</div></div></div><button onclick="showFiles('${top.repo}')">查看量化文件并下载</button></div>` + list.slice(1).map(m => `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="pill-fit">${fitLabel(m.fit)}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${m.params} ｜ ${m.fit}</div></div><div class="mright"><div class="bar"><div class="fill teal" style="width:${fitLabel(m.fit) === '流畅' ? 90 : 55}%"></div></div><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div></div>`).join("");
@@ -76,7 +75,7 @@ window.loadCatalog = async function() {
 function renderCatalog() {
   const el = document.getElementById("catalog");
   let list = catalogCache;
-  if (catFilter === 'fit') list = list.filter(m => m.fit.startsWith("适合"));
+  if (catFilter === 'fit') list = list.filter(m => m.fit.startsWith("流畅"));
   else if (catFilter !== 'all') list = list.filter(m => m.cat === catFilter);
   el.innerHTML = list.length ? list.map(m => `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="pill-fit">${fitLabel(m.fit)}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${m.cat} ｜ ${m.params} ｜ 仓库 ${m.repo} ｜ ${m.fit}</div></div><div class="mright"><div class="bar"><div class="fill teal" style="width:${fitLabel(m.fit) === '流畅' ? 90 : fitLabel(m.fit) === '能跑' ? 55 : 25}%"></div></div><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div></div>`).join("") : "这个筛选下没有模型，换个筛选试试。";
 }
