@@ -23,6 +23,7 @@ const LLAMA_PORT: u16 = 8080;
 struct AppState {
     chat_running: Mutex<bool>,
     chat_model: Mutex<String>,
+    chat_port: Mutex<u16>,
 }
 
 // ---------- 目录 ----------
@@ -127,34 +128,36 @@ struct CatalogModel {
     repo: String,
     params: String,
     desc: String,
+    cat: String,
 }
 
 fn catalog() -> Vec<CatalogModel> {
     let rows = [
-        ("qwen3.8-flash-next", "Qwen3.8 Flash Next", "unsloth/Qwen3.8-Flash-Next-GGUF", "180B 总量 / 约 6B 激活", "旗舰级混合专家模型，激活参数不大，适合想试大模型上限的用户。"),
-        ("qwen3.8-27b", "Qwen3.8 27B", "unsloth/Qwen3.8-27B-GGUF", "27B", "大参数量通用模型，显存和内存要求都比较高。"),
-        ("muse-glimmer-30b", "Muse Glimmer 30B", "unsloth/Muse-Glimmer-30B-GGUF", "30B", "30B 级通用对话模型，适合长对话和写作。"),
-        ("qwen3.6-35b-a3b", "Qwen3.6 35B A3B", "unsloth/Qwen3.6-35B-A3B-GGUF", "35B 总量 / 约 3B 激活", "混合专家结构，实际激活参数小，推理成本相对低。"),
-        ("qwen3.6-27b", "Qwen3.6 27B", "unsloth/Qwen3.6-27B-GGUF", "27B", "27B 级通用模型，中文表现较好。"),
-        ("gemma-4-26b-a4b", "Gemma 4 26B A4B", "unsloth/gemma-4-26B-A4B-it-GGUF", "26B 总量 / 约 4B 激活", "谷歌 Gemma 系列的混合专家版本，指令跟随较稳。"),
-        ("gemma-4-31b", "Gemma 4 31B", "unsloth/gemma-4-31B-it-GGUF", "31B", "31B 级指令模型，适合问答和摘要。"),
-        ("gemma-4-12b", "Gemma 4 12B", "unsloth/gemma-4-12b-it-GGUF", "12B", "12B 中等规模，普通家用显卡比较现实的选择。"),
-        ("gemma-4-e4b", "Gemma 4 E4B", "unsloth/gemma-4-E4B-it-GGUF", "E4B（高效小模型）", "高效小模型，内存小的电脑也可以先从它入门。"),
-        ("qwen3.5-122b-a10b", "Qwen3.5 122B A10B", "unsloth/Qwen3.5-122B-A10B-GGUF", "122B 总量 / 约 10B 激活", "超大总量模型，只建议大显存或大内存机器尝试。"),
-        ("qwen3.5-9b", "Qwen3.5 9B", "unsloth/Qwen3.5-9B-GGUF", "9B", "9B 级，速度和效果比较均衡的日常选择。"),
-        ("qwen3.5-4b", "Qwen3.5 4B", "unsloth/Qwen3.5-4B-GGUF", "4B", "4B 小模型，普通笔记本 CPU 也能跑起来。"),
-        ("glm-4.7-flash", "GLM-4.7 Flash", "unsloth/GLM-4.7-Flash-GGUF", "见仓库（Flash 系列）", "智谱 Flash 系列，速度快，适合高频对话。"),
-        ("devstral-small-2-24b", "Devstral Small 2 24B", "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF", "24B", "偏编程和工具调用的 24B 模型，适合 Agent 任务。"),
-        ("gpt-oss-20b", "GPT-OSS 20B", "unsloth/gpt-oss-20b-GGUF", "20B", "开源权重的大模型，适合想试非中系模型的。"),
-        ("gpt-oss-120b", "GPT-OSS 120B", "unsloth/gpt-oss-120b-GGUF", "120B", "120B 级，只建议大显存机器尝试。"),
+        ("qwen3.8-flash-next", "Qwen3.8 Flash Next", "unsloth/Qwen3.8-Flash-Next-GGUF", "180B 总量 / 约 6B 激活", "旗舰级混合专家模型，激活参数不大，适合想试大模型上限的用户。", "推理"),
+        ("qwen3.8-27b", "Qwen3.8 27B", "unsloth/Qwen3.8-27B-GGUF", "27B", "大参数量通用模型，显存和内存要求都比较高。", "对话"),
+        ("muse-glimmer-30b", "Muse Glimmer 30B", "unsloth/Muse-Glimmer-30B-GGUF", "30B", "30B 级通用对话模型，适合长对话和写作。", "对话"),
+        ("qwen3.6-35b-a3b", "Qwen3.6 35B A3B", "unsloth/Qwen3.6-35B-A3B-GGUF", "35B 总量 / 约 3B 激活", "混合专家结构，实际激活参数小，推理成本相对低。", "推理"),
+        ("qwen3.6-27b", "Qwen3.6 27B", "unsloth/Qwen3.6-27B-GGUF", "27B", "27B 级通用模型，中文表现较好。", "对话"),
+        ("gemma-4-26b-a4b", "Gemma 4 26B A4B", "unsloth/gemma-4-26B-A4B-it-GGUF", "26B 总量 / 约 4B 激活", "谷歌 Gemma 系列的混合专家版本，指令跟随较稳。", "看图"),
+        ("gemma-4-31b", "Gemma 4 31B", "unsloth/gemma-4-31B-it-GGUF", "31B", "31B 级指令模型，适合问答和摘要。", "看图"),
+        ("gemma-4-12b", "Gemma 4 12B", "unsloth/gemma-4-12b-it-GGUF", "12B", "12B 中等规模，普通家用显卡比较现实的选择。", "看图"),
+        ("gemma-4-e4b", "Gemma 4 E4B", "unsloth/gemma-4-E4B-it-GGUF", "E4B（高效小模型）", "高效小模型，内存小的电脑也可以先从它入门。", "看图"),
+        ("qwen3.5-122b-a10b", "Qwen3.5 122B A10B", "unsloth/Qwen3.5-122B-A10B-GGUF", "122B 总量 / 约 10B 激活", "超大总量模型，只建议大显存或大内存机器尝试。", "推理"),
+        ("qwen3.5-9b", "Qwen3.5 9B", "unsloth/Qwen3.5-9B-GGUF", "9B", "9B 级，速度和效果比较均衡的日常选择。", "对话"),
+        ("qwen3.5-4b", "Qwen3.5 4B", "unsloth/Qwen3.5-4B-GGUF", "4B", "4B 小模型，普通笔记本 CPU 也能跑起来。", "对话"),
+        ("glm-4.7-flash", "GLM-4.7 Flash", "unsloth/GLM-4.7-Flash-GGUF", "见仓库（Flash 系列）", "智谱 Flash 系列，速度快，适合高频对话。", "对话"),
+        ("devstral-small-2-24b", "Devstral Small 2 24B", "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF", "24B", "偏编程和工具调用的 24B 模型，适合 Agent 任务。", "编程"),
+        ("gpt-oss-20b", "GPT-OSS 20B", "unsloth/gpt-oss-20b-GGUF", "20B", "开源权重的大模型，适合想试非中系模型的。", "对话"),
+        ("gpt-oss-120b", "GPT-OSS 120B", "unsloth/gpt-oss-120b-GGUF", "120B", "120B 级，只建议大显存机器尝试。", "推理"),
     ];
     rows.iter()
-        .map(|(id, name, repo, params, desc)| CatalogModel {
+        .map(|(id, name, repo, params, desc, cat)| CatalogModel {
             id: id.to_string(),
             name: name.to_string(),
             repo: repo.to_string(),
             params: params.to_string(),
             desc: desc.to_string(),
+            cat: cat.to_string(),
         })
         .collect()
 }
@@ -172,7 +175,7 @@ fn get_catalog_with_fit() -> Vec<serde_json::Value> {
         .map(|m| {
             serde_json::json!({
                 "id": m.id, "name": m.name, "repo": m.repo,
-                "params": m.params, "desc": m.desc,
+                "params": m.params, "desc": m.desc, "cat": m.cat,
                 "fit": fit_hint(&m.params, hw.memory_total_gb),
             })
         })
@@ -325,7 +328,7 @@ fn find_sd_cli() -> Option<PathBuf> {
 }
 
 // ---------- 聊天 ----------
-fn chat_ask_inner(message: &str) -> Result<String, String> {
+fn chat_ask_inner(message: &str, port: u16) -> Result<String, String> {
     let body = serde_json::json!({
         "model": "local",
         "messages": [{"role": "user", "content": message}],
@@ -334,7 +337,7 @@ fn chat_ask_inner(message: &str) -> Result<String, String> {
     let mut last_err = String::new();
     for _ in 0..4 {
         match reqwest::blocking::Client::new()
-            .post(format!("http://127.0.0.1:{}/v1/chat/completions", LLAMA_PORT))
+            .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
             .json(&body)
             .timeout(std::time::Duration::from_secs(300))
             .send()
@@ -360,7 +363,9 @@ fn chat_ask_inner(message: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32) -> Result<String, String> {
+fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32, port: Option<u16>) -> Result<String, String> {
+    let port = port.unwrap_or(LLAMA_PORT);
+    *state.chat_port.lock().unwrap() = port;
     let bin = find_llama_server().ok_or("还没下载 llama.cpp 引擎，请先在“模型”页下载聊天引擎")?;
     let model_path = models_dir().join(&model);
     if !model_path.exists() {
@@ -374,7 +379,7 @@ fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32) -> Result<
         .arg("--host")
         .arg("127.0.0.1")
         .arg("--port")
-        .arg(LLAMA_PORT.to_string())
+        .arg(port.to_string())
         .arg("-c")
         .arg(ctx.to_string());
     #[cfg(windows)]
@@ -385,7 +390,7 @@ fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32) -> Result<
     cmd.spawn().map_err(|e| e.to_string())?;
     // 端口通不等于模型加载完：等 /health 返回 ok，最多 60 秒。
     for _ in 0..60 {
-        if let Ok(resp) = reqwest::blocking::get(format!("http://127.0.0.1:{}/health", LLAMA_PORT)) {
+        if let Ok(resp) = reqwest::blocking::get(format!("http://127.0.0.1:{}/health", port)) {
             if let Ok(v) = resp.json::<serde_json::Value>() {
                 if v.get("status").and_then(|s| s.as_str()) == Some("ok") {
                     break;
@@ -413,8 +418,26 @@ fn stop_chat(state: tauri::State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn chat_ask(message: String) -> Result<String, String> {
-    chat_ask_inner(&message)
+fn chat_ask(state: tauri::State<AppState>, message: String) -> Result<String, String> {
+    let port = *state.chat_port.lock().unwrap();
+    chat_ask_inner(&message, if port == 0 { LLAMA_PORT } else { port })
+}
+#[tauri::command]
+fn get_chat_status(state: tauri::State<AppState>) -> serde_json::Value {
+    serde_json::json!({"running": *state.chat_running.lock().unwrap(), "model": state.chat_model.lock().unwrap().clone(), "port": *state.chat_port.lock().unwrap()})
+}
+#[tauri::command]
+fn open_folder(path: String) -> Result<String, String> {
+    let p = if Path::new(&path).is_file() { Path::new(&path).parent().map(|x| x.to_path_buf()).unwrap_or_else(|| PathBuf::from(&path)) } else { PathBuf::from(&path) };
+    #[cfg(target_os = "windows")]
+    { Command::new("explorer").arg(&p).spawn().map_err(|e| e.to_string())?; }
+    #[cfg(not(target_os = "windows"))]
+    { Command::new("xdg-open").arg(&p).spawn().map_err(|e| e.to_string())?; }
+    Ok(format!("已打开：{}", p.display()))
+}
+#[tauri::command]
+fn engine_status() -> serde_json::Value {
+    serde_json::json!({"llama": find_llama_server().map(|p| p.to_string_lossy().to_string()), "sd": find_sd_cli().map(|p| p.to_string_lossy().to_string())})
 }
 
 // ---------- 画图 / 视频 ----------
@@ -677,7 +700,7 @@ fn agent_tool(folder: &Path, tool: &str, args: &HashMap<String, String>) -> Stri
 }
 
 #[tauri::command]
-fn agent_run(folder: String, task: String) -> Result<Vec<String>, String> {
+fn agent_run(state: tauri::State<AppState>, folder: String, task: String) -> Result<Vec<String>, String> {
     let folder_path = PathBuf::from(&folder);
     if !folder_path.is_dir() {
         return Err("工作文件夹不存在，请先创建它".to_string());
@@ -689,7 +712,7 @@ fn agent_run(folder: String, task: String) -> Result<Vec<String>, String> {
             "你是本地 Agent，只能用下面工具之一，输出一个 JSON，不要多余文字：{{\"tool\": \"list_dir|read_file|write_file|run_command|finish\", \"reason\": \"一句话\", \"args\": {{\"path\": \"\", \"content\": \"\", \"command\": \"\"}}}}。任务：{}。工作文件夹：{}。已完成步骤：{}",
             task, folder, steps.join("；")
         );
-        let reply = chat_ask_inner(&prompt)?;
+        let port = *state.chat_port.lock().unwrap(); let reply = chat_ask_inner(&prompt, if port == 0 { LLAMA_PORT } else { port })?;
         let json_text = reply
             .find('{')
             .and_then(|s| reply.rfind('}').map(|e| &reply[s..=e]))
@@ -792,6 +815,9 @@ fn main() {
             delete_model,
             search_hf,
             list_local_model_info,
+            get_chat_status,
+            open_folder,
+            engine_status,
             web_search,
         ])
         .setup(|app| {
