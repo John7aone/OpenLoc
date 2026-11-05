@@ -1,18 +1,50 @@
 // Tauri 2 withGlobalTauri: use the injected global API, no bundler needed.
-const invoke = (...args) => window.__TAURI__.core.invoke(...args);
+// 直接打开 src/index.html 时没有这个对象，界面仍可走查，但不能检测硬件或启动引擎。
+function hasTauri() {
+  return !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
+}
+function invoke(cmd, args) {
+  if (!hasTauri()) {
+    const err = new Error("网页预览");
+    err.web = true;
+    return Promise.reject(err);
+  }
+  return window.__TAURI__.core.invoke(cmd, args);
+}
 let catalogCache = [];
 let catFilter = 'fit';
 let runCtx = 'auto';
 let webOn = false;
+const SAMPLE_REC = [
+  { name: "Qwen3.5 4B", desc: "4B 小模型，普通笔记本也可以先从它入门。", params: "4B", repo: "unsloth/Qwen3.5-4B-GGUF" },
+  { name: "Gemma 4 E4B", desc: "高效小模型，内存小的电脑也可以先试。", params: "E4B（高效小模型）", repo: "unsloth/gemma-4-E4B-it-GGUF" },
+  { name: "Qwen3.5 9B", desc: "速度和效果比较均衡的日常选择。", params: "9B", repo: "unsloth/Qwen3.5-9B-GGUF" },
+];
 function getPort() { try { return parseInt(localStorage.getItem('openloc-port') || '8080'); } catch (e) { return 8080; } }
 window.tab = function(id, btn) {
+  const page = document.getElementById(id);
+  if (!page) return;
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("on"));
-  document.getElementById(id).classList.add("on");
-  document.querySelectorAll("nav button").forEach(b => b.classList.remove("on"));
-  if (btn) btn.classList.add("on");
-  if (id === "cat") loadCatalog();
-  if (id === "chat" || id === "img" || id === "vid" || id === "md") loadModels();
-  if (id === "md") updatePlan();
+  page.classList.add("on");
+  document.querySelectorAll("#nav button").forEach(b => {
+    b.classList.remove("on");
+    b.removeAttribute("aria-current");
+  });
+  const fromNav = btn && btn.closest && btn.closest("#nav");
+  const target = fromNav ? btn : document.querySelector('#nav button[data-page="' + id + '"]');
+  if (target) {
+    target.classList.add("on");
+    target.setAttribute("aria-current", "page");
+  }
+  const main = document.querySelector(".main");
+  if (main) main.scrollTop = 0;
+  if (id === "overview") refreshOverviewSteps();
+  if (id === "cat") { loadCatalog(); refreshCatEmpty(); }
+  if (id === "md") { loadModels(); loadEngineStatus(); }
+  if (id === "chat") { loadModels(); refreshChatEmpty(); }
+  if (id === "agent") refreshAgentEmpty();
+  if (id === "img") { loadModels(); refreshImgEmpty(); }
+  if (id === "vid") { loadModels(); refreshVidEmpty(); }
   if (id === "settings") loadEngineStatus();
 };
 window.toggleTheme = function() {
@@ -26,42 +58,119 @@ window.setTheme = function(v) {
   const b = document.getElementById("themeBtn2"); if (b) b.textContent = label;
   try { localStorage.setItem("openloc-theme", v); } catch (e) {}
 };
+function setText(id, text) { const n = document.getElementById(id); if (n) n.textContent = text; }
+function showHwUnavailable(reason) {
+  setText("gpu-status", reason);
+  setText("hw-gpu", "未检测");
+  setText("hw-gpu-sub", reason);
+  setText("hw-cpu", "未检测");
+  setText("hw-cpu-sub", "没有读取本机");
+  setText("hw-mem", "未检测");
+  setText("hw-mem-sub", "没有读取本机");
+  setText("hw-disk", "未检测");
+  setText("hw-disk-sub", "没有读取本机");
+  setText("vram-text", "未检测");
+  setText("mem-text", "未检测");
+  setText("disk-text", "未检测");
+  ["vram-bar", "mem-bar", "disk-bar"].forEach(id => {
+    const n = document.getElementById(id);
+    if (n) n.style.width = "0%";
+  });
+  setText("rec-title", "推荐模型（未按本机检测）");
+  setText("rec-desc", reason + "。下面的例子来自公开目录，适合程度不是按你的电脑算的。桌面程序里点重新检测，会按显存重算。");
+  setText("step-hw-sub", reason);
+  setText("step-hw-status", "未检测");
+  setText("step-hw-num", "1");
+  const step = document.getElementById("step-hw");
+  if (step) step.classList.remove("done");
+  const gi = document.getElementById("gpu-info");
+  if (gi) gi.textContent = reason + "。";
+  renderRec(SAMPLE_REC, true);
+}
 window.loadHw = async function() {
-  const h = await invoke("get_hardware");
-  document.getElementById("gpu-status").textContent = "显卡状态：● " + h.gpu + (h.gpu_vram_gb ? "（" + h.gpu_vram_gb.toFixed(1) + "GB）" : "");
+  if (!hasTauri()) {
+    showHwUnavailable("网页预览，没有检测本机硬件");
+    return;
+  }
+  let h;
+  try { h = await invoke("get_hardware"); }
+  catch (e) { showHwUnavailable("没有检测到本机硬件"); return; }
+  if (!h || (!h.cpu && !(h.memory_total_gb > 0))) {
+    showHwUnavailable("没有检测到本机硬件");
+    return;
+  }
   const vram = h.gpu_vram_gb || 0;
+  const noGpu = !(vram > 0);
+  setText("gpu-status", "显卡：" + h.gpu + (vram ? "（" + vram.toFixed(1) + " GB）" : "（无独立显存）"));
   const smooth = vram >= 16 ? 14 : vram >= 8 ? 8 : vram >= 6 ? 7 : vram >= 4 ? 4 : 2;
-  document.getElementById("rec-title").textContent = "流畅运行 " + smooth + "B 以内的模型";
-  document.getElementById("rec-desc").textContent = "推荐按显存算，不是按内存算：模型能放进显存才流畅，放不进显存只能分到内存，速度会变慢。右边的推荐里，标“流畅”的才能放进你的显存。";
-  document.getElementById("vram-text").textContent = vram ? vram.toFixed(1) + " GB 显存" : "未检测到独立显存，走 CPU / 内存模式";
-  document.getElementById("vram-bar").style.width = vram ? Math.min(100, vram / 16 * 100) + "%" : "8%";
-  document.getElementById("mem-text").textContent = h.memory_total_gb.toFixed(0) + " GB，可用 " + h.memory_gb.toFixed(0) + " GB";
-  document.getElementById("mem-bar").style.width = Math.max(0, Math.min(100, (1 - h.memory_gb / h.memory_total_gb) * 100)) + "%";
-  document.getElementById("disk-text").textContent = "剩余 " + h.disk_free_gb.toFixed(0) + " GB" + (h.disk_total_gb ? " / 共 " + h.disk_total_gb.toFixed(0) + " GB" : "");
-  document.getElementById("disk-bar").style.width = h.disk_total_gb ? Math.max(0, Math.min(100, (1 - h.disk_free_gb / h.disk_total_gb) * 100)) + "%" : "8%";
-  // 硬件卡片：分行显示，不贴 JSON
-  const gpuShort = h.gpu.replace("NVIDIA GeForce ", "");
-  document.getElementById("hw-gpu").textContent = gpuShort;
-  document.getElementById("hw-gpu-sub").textContent = vram ? vram.toFixed(1) + " GB 显存" : "未检测到独立显存";
-  document.getElementById("hw-cpu").textContent = h.cpu.replace("13th Gen Intel(R) Core(TM) ", "").replace("(R)", "");
-  document.getElementById("hw-cpu-sub").textContent = h.cpu_count + " 线程";
-  document.getElementById("hw-mem").textContent = h.memory_total_gb.toFixed(0) + " GB";
-  document.getElementById("hw-mem-sub").textContent = "可用 " + h.memory_gb.toFixed(0) + " GB";
-  document.getElementById("hw-disk").textContent = "程序所在盘";
-  document.getElementById("hw-disk-sub").textContent = "剩余 " + h.disk_free_gb.toFixed(0) + " GB / 共 " + (h.disk_total_gb ? h.disk_total_gb.toFixed(0) + " GB" : "未知");
-  const gi = document.getElementById("gpu-info"); if (gi) gi.textContent = h.gpu + " · " + (vram ? vram.toFixed(1) + " GB" : "无独立显存") + "，自动检测，推理用 CUDA（N 卡）。";
-  loadRecommended();
+  if (noGpu) {
+    setText("rec-title", "没检测到独立显存，先用小模型");
+    setText("rec-desc", "没有读到独立显卡。下面的“流畅 / 能跑”按内存粗算，放不进显存就会分到内存，速度会慢。");
+  } else {
+    setText("rec-title", "流畅运行 " + smooth + "B 以内的模型");
+    setText("rec-desc", "推荐按显存算，不是按内存算：模型能放进显存才流畅，放不进显存只能分到内存，速度会变慢。右边的推荐里，标“流畅”的才能放进你的显存。");
+  }
+  setText("vram-text", vram ? vram.toFixed(1) + " GB 显存" : "未检测到独立显存，走 CPU / 内存模式");
+  document.getElementById("vram-bar").style.width = vram ? Math.min(100, vram / 16 * 100) + "%" : "0%";
+  setText("mem-text", h.memory_total_gb.toFixed(0) + " GB，可用 " + h.memory_gb.toFixed(0) + " GB");
+  document.getElementById("mem-bar").style.width = Math.max(0, Math.min(100, (1 - h.memory_gb / Math.max(h.memory_total_gb, 0.1)) * 100)) + "%";
+  setText("disk-text", "剩余 " + h.disk_free_gb.toFixed(0) + " GB" + (h.disk_total_gb ? " / 共 " + h.disk_total_gb.toFixed(0) + " GB" : ""));
+  document.getElementById("disk-bar").style.width = h.disk_total_gb ? Math.max(0, Math.min(100, (1 - h.disk_free_gb / h.disk_total_gb) * 100)) + "%" : "0%";
+  const gpuShort = (h.gpu || "").replace("NVIDIA GeForce ", "");
+  setText("hw-gpu", gpuShort || "未检测到显卡");
+  setText("hw-gpu-sub", vram ? vram.toFixed(1) + " GB 显存" : "未检测到独立显存");
+  setText("hw-cpu", (h.cpu || "").replace("13th Gen Intel(R) Core(TM) ", "").replace("(R)", "") || "未检测到处理器");
+  setText("hw-cpu-sub", h.cpu_count + " 线程");
+  setText("hw-mem", h.memory_total_gb.toFixed(0) + " GB");
+  setText("hw-mem-sub", "可用 " + h.memory_gb.toFixed(0) + " GB");
+  setText("hw-disk", "程序所在盘");
+  setText("hw-disk-sub", "剩余 " + h.disk_free_gb.toFixed(0) + " GB / 共 " + (h.disk_total_gb ? h.disk_total_gb.toFixed(0) + " GB" : "未知"));
+  const gi = document.getElementById("gpu-info");
+  if (gi) gi.textContent = h.gpu + " · " + (vram ? vram.toFixed(1) + " GB" : "无独立显存") + "。这是本机检测结果。";
+  const step = document.getElementById("step-hw");
+  if (step) step.classList.add("done");
+  setText("step-hw-num", "✓");
+  setText("step-hw-status", noGpu ? "无独立显卡" : "已检测");
+  setText("step-hw-sub", noGpu ? "已读到本机，没有独立显存，可以走 CPU / 内存" : "已读到本机显卡");
+  await loadRecommended();
 };
-function fitLabel(fit) { if (fit.startsWith("流畅")) return "流畅"; if (fit.startsWith("能跑")) return "能跑"; return "较慢"; }
+function fitLabel(fit) { if (!fit || fit === "未检测") return "未检测"; if (fit.startsWith("流畅")) return "流畅"; if (fit.startsWith("能跑")) return "能跑"; return "较慢"; }
+function recButton(m, unknown) {
+  if (unknown) return `<button type="button" onclick="tab('cat')">去模型</button>`;
+  return `<button type="button" onclick="showFiles('${m.repo}')">查看量化文件并下载</button>`;
+}
+function renderRec(models, unknown) {
+  const el = document.getElementById("recmodels");
+  if (!el) return;
+  if (!models || !models.length) {
+    el.innerHTML = "<p class=\"muted\">没有可展示的推荐。</p>";
+    return;
+  }
+  const note = unknown ? `<p class="muted small">下面是公开目录里的例子。适合程度标「未检测」，不是按这台电脑算的。</p>` : "";
+  const top = models[0];
+  const pill = fitLabel(unknown ? "未检测" : top.fit);
+  const pillClass = unknown ? "pill-unknown" : "pill-fit";
+  const rest = models.slice(1).map(m => {
+    const p = fitLabel(unknown ? "未检测" : m.fit);
+    const pc = unknown ? "pill-unknown" : "pill-fit";
+    const bar = unknown ? "" : `<div class="bar"><div class="fill teal" style="width:${p === "流畅" ? 90 : 55}%"></div></div>`;
+    const meta = unknown ? m.params : (m.params + " ｜ " + m.fit);
+    return `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="${pc}">${p}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${meta}</div></div><div class="mright">${bar}${recButton(m, unknown)}</div></div>`;
+  }).join("");
+  el.innerHTML = note + `<div class="feat"><div class="row"><b style="font-size:18px">${top.name}</b><span class="${pillClass}">${pill}</span><span class="muted small">${unknown ? "目录示例" : "主推"}</span></div><div class="mdesc">${top.desc}</div><div class="statrow"><div class="stat"><div class="k">参数</div><div class="v">${top.params}</div></div><div class="stat"><div class="k">适合程度</div><div class="v">${unknown ? "未检测" : top.fit}</div></div><div class="stat"><div class="k">来源</div><div class="v">${top.repo}</div></div></div>${recButton(top, unknown)}</div>` + rest;
+}
 window.loadRecommended = async function() {
   const el = document.getElementById("recmodels"); if (!el) return;
+  if (!hasTauri()) { renderRec(SAMPLE_REC, true); return; }
   try {
     const models = await invoke("get_catalog_with_fit");
-    const good = models.filter(m => m.fit.startsWith("流畅")).slice(0, 3);
+    const good = models.filter(m => m.fit && m.fit.startsWith("流畅")).slice(0, 3);
     const list = good.length ? good : models.slice(0, 3);
-    const top = list[0];
-    el.innerHTML = `<div class="feat"><div class="row"><b style="font-size:18px">${top.name}</b><span class="pill-fit">${fitLabel(top.fit)}</span><span class="muted small">主推</span></div><div class="mdesc">${top.desc}</div><div class="statrow"><div class="stat"><div class="k">参数</div><div class="v">${top.params}</div></div><div class="stat"><div class="k">适合程度</div><div class="v">${top.fit}</div></div><div class="stat"><div class="k">来源</div><div class="v">${top.repo}</div></div></div><button onclick="showFiles('${top.repo}')">查看量化文件并下载</button></div>` + list.slice(1).map(m => `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="pill-fit">${fitLabel(m.fit)}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${m.params} ｜ ${m.fit}</div></div><div class="mright"><div class="bar"><div class="fill teal" style="width:${fitLabel(m.fit) === '流畅' ? 90 : 55}%"></div></div><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div></div>`).join("");
-  } catch (e) { el.textContent = "失败：" + e; }
+    renderRec(list, false);
+  } catch (e) {
+    setText("rec-title", "目录没加载，下面不是按本机推荐");
+    renderRec(SAMPLE_REC, true);
+  }
 };
 window.loadCatalog = async function() {
   const el = document.getElementById("catalog");
@@ -70,7 +179,7 @@ window.loadCatalog = async function() {
     const models = await invoke("get_catalog_with_fit");
     catalogCache = models;
     renderCatalog();
-  } catch (e) { el.textContent = "失败：" + e; }
+  } catch (e) { el.textContent = !hasTauri() ? "网页预览加载不了模型目录。桌面程序里这里可以查看 Hugging Face 文件并下载。" : ("目录加载失败：" + e); }
 };
 function renderCatalog() {
   const el = document.getElementById("catalog");
@@ -108,7 +217,7 @@ window.loadInstalled = async function() {
       const fit = m.size_gb <= (h.gpu_vram_gb || 0) ? "流畅" : m.size_gb <= h.memory_total_gb ? "能跑" : "较慢";
       const pct = Math.min(100, m.size_gb / Math.max(1, h.gpu_vram_gb || 8) * 100);
       return `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="pill-fit">${fit}</span></div><div class="mmeta">${quant} · ${m.size_gb.toFixed(1)} GB</div><div class="bar"><div class="fill teal" style="width:${pct}%"></div></div></div><div class="mright"><button class="sec" onclick="openModelFolder('${m.name}')">打开位置</button><button class="sec" onclick="delModel('${m.name}')">删除</button><button onclick="runInstalled('${m.name}')">运行</button></div></div>`;
-    }).join("") : "还没有已安装模型，去推荐模型页下一个，或在下面导入。";
+    }).join("") : "<p class=\"muted\">已安装列表是空的。</p>";
   } catch (e) { el.textContent = "失败：" + e; }
 };
 window.runInstalled = function(name) {
@@ -155,21 +264,51 @@ window.dlCat = async function(repo, f) {
   await invoke("download_file", { url: `https://huggingface.co/${repo}/resolve/main/${f}`, filename: f, kind: "model" });
   alert("已开始下载 " + f);
 };
-window.dl = async function(kind, url, filename) {
-  try { document.getElementById("dlmsg").textContent = await invoke("download_file", { url, filename, kind }); loadEngineStatus(); }
-  catch (e) { document.getElementById("dlmsg").textContent = "失败：" + e; }
+window.dlLlama = function() {
+  return dl("engine", document.getElementById("llamaurl").value, "llama.zip", "run-dlmsg");
 };
+window.dlSd = function() {
+  return dl("engine", document.getElementById("sdurl").value, "sd.zip", "run-dlmsg");
+};
+window.dl = async function(kind, url, filename, msgId) {
+  const el = document.getElementById(msgId || "dlmsg");
+  if (!hasTauri()) {
+    if (el) el.textContent = "网页预览不能下载。请用 npm run tauri dev 打开桌面程序，在运行页安装引擎。";
+    return;
+  }
+  try {
+    const r = await invoke("download_file", { url, filename, kind });
+    if (el) el.textContent = r;
+    loadEngineStatus();
+    refreshOverviewSteps();
+  } catch (e) { if (el) el.textContent = "失败：" + e; }
+};
+function engineLine(llama, sd, web) {
+  if (web) return "网页预览不能安装或启动引擎，也看不到本机是否已安装。";
+  const chat = llama ? "已安装" : "未安装";
+  const draw = sd ? "已安装" : "未安装";
+  return "聊天引擎：" + chat + "；画图 / 视频引擎：" + draw + "。在运行页安装并启动。";
+}
 window.loadEngineStatus = async function() {
-  try { const s = await invoke("engine_status"); const el = document.getElementById("engine-info"); if (el) el.textContent = "聊天引擎：" + (s.llama ? "已安装（" + s.llama + "）" : "未安装") + "；画图引擎：" + (s.sd ? "已安装" : "未安装") + "。引擎不在安装包里，第一次用时点下载，免费。"; } catch (e) {}
+  const apply = (t) => { setText("engine-info", t); setText("run-engine-info", t); };
+  if (!hasTauri()) { apply(engineLine(null, null, true)); return; }
+  try {
+    const s = await invoke("engine_status");
+    apply(engineLine(s.llama, s.sd, false));
+  } catch (e) { apply("没读到引擎状态。可以在运行页重新安装。"); }
 };
 window.loadModels = async function() {
-  const list = await invoke("list_local_models");
-  document.getElementById("modellist") && (document.getElementById("modellist").innerHTML = list.map(m => `<li>${m}</li>`).join(""));
+  let list = [];
+  try { list = await invoke("list_local_models"); } catch (e) { list = []; }
+  const modelList = document.getElementById("modellist");
+  if (modelList) modelList.innerHTML = list.map(m => `<li>${m}</li>`).join("");
   for (const id of ["chatmodel", "imgmodel", "vidmodel", "runmodel"]) {
     const sel = document.getElementById(id);
     if (sel) sel.innerHTML = list.map(m => `<option value="${m}">${m}</option>`).join("");
   }
-  updatePlan();
+  refreshRunEmpty();
+  try { await updatePlan(); } catch (e) {}
+  await refreshCatEmpty();
 };
 window.importModel = async function() {
   try { document.getElementById("importmsg").textContent = await invoke("import_model", { path: document.getElementById("importpath").value }); loadModels(); loadInstalled(); }
@@ -222,7 +361,7 @@ window.stopBg = async function(name) {
 };
 window.startRunModel = async function() {
   if (!authOn("openloc-auth-chat")) { alert("你没授权 OpenLoc 启动聊天服务：去设置 → 授权控制，勾上“允许启动 / 停止聊天服务”。"); return; }
-  const m = document.getElementById("runmodel").value; if (!m) { alert("先在模型页下载或导入一个模型。"); return; }
+  const m = document.getElementById("runmodel").value; if (!m) { alert("还没选中模型。先到模型页下载或导入一个。"); return; }
   const ctx = runCtx === 'auto' ? 16384 : runCtx;
   const card = document.getElementById("startcard"); card.style.display = "block";
   document.getElementById("start-title").textContent = "正在启动 " + m;
@@ -307,22 +446,26 @@ window.sendChat = async function() {
     if (box.lastChild) box.lastChild.textContent = "AI：" + r;
   } catch (e) {
     const box = document.getElementById("chatbox");
-    if (box.lastChild) box.lastChild.textContent = "失败：" + e;
+    const msg = (!hasTauri() || (e && e.web)) ? "网页预览没有聊天服务。请用 npm run tauri dev 打开桌面程序，先在运行页启动。" : ("失败：" + e);
+    if (box.lastChild) box.lastChild.textContent = msg;
   }
 };
 document.getElementById("chatin") && document.getElementById("chatin").addEventListener("keydown", function(e) {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
 window.genImg = async function() {
+  if (!hasTauri()) { document.getElementById("imgmsg").textContent = "网页预览不能画图。"; return; }
   if (!authOn("openloc-auth-img")) { alert("你没授权 OpenLoc 启动画图引擎：去设置 → 授权控制，勾上“允许启动画图 / 视频引擎”。"); return; }
   try { document.getElementById("imgmsg").textContent = await invoke("generate_image", { model: document.getElementById("imgmodel").value, prompt: document.getElementById("imgprompt").value, steps: parseInt(document.getElementById("imgsteps").value), width: 512, height: 512 }); }
   catch (e) { document.getElementById("imgmsg").textContent = "失败：" + e; }
 };
 window.genMotion = async function() {
+  if (!hasTauri()) { document.getElementById("vidmsg").textContent = "网页预览不能生成动效视频。"; return; }
   try { document.getElementById("vidmsg").textContent = await invoke("generate_motion_video", { image: document.getElementById("vidimg").value, seconds: 3 }); }
   catch (e) { document.getElementById("vidmsg").textContent = "失败：" + e; }
 };
 window.genVid = async function() {
+  if (!hasTauri()) { document.getElementById("vidmsg").textContent = "网页预览不能生成扩散视频。"; return; }
   if (!authOn("openloc-auth-img")) { alert("你没授权 OpenLoc 启动画图 / 视频引擎：去设置 → 授权控制，勾上“允许启动画图 / 视频引擎”。"); return; }
   try { document.getElementById("vidmsg").textContent = await invoke("generate_diffusion_video", { model: document.getElementById("vidmodel").value, prompt: document.getElementById("vidprompt").value, frames: 25 }); }
   catch (e) { document.getElementById("vidmsg").textContent = "失败：" + e; }
@@ -333,6 +476,8 @@ window.takeShot = async function() {
   catch (e) { if (el) el.textContent = "截屏失败：" + e; alert("截屏失败：" + e); }
 };
 window.runAgent = async function() {
+  if (!document.getElementById("afolder").value.trim()) { refreshAgentEmpty(); focusAgentFolder(); return; }
+  if (!hasTauri()) { document.getElementById("asteps").textContent = "网页预览不能运行 Agent。"; return; }
   if (!authOn("openloc-auth-agent")) { alert("你没授权 Agent 跑命令：去设置 → 授权控制，勾上“允许 Agent 在工作文件夹里跑命令”。"); return; }
   const el = document.getElementById("asteps");
   el.textContent = "Agent 运行中…";
@@ -350,7 +495,148 @@ window.savePort = function() {
   try { localStorage.setItem("openloc-port", String(v)); } catch (e) {}
   document.getElementById("portmsg").textContent = "已保存端口 " + v + "，下次启动聊天服务时生效。";
 };
-(function() {
+function setStepMark(id, done, n) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle("done", !!done);
+  const num = el.querySelector(".num");
+  if (num) num.textContent = done ? "✓" : String(n);
+}
+async function refreshOverviewSteps() {
+  if (!hasTauri()) {
+    setStepMark("step-engine", false, 2);
+    setStepMark("step-model", false, 3);
+    return;
+  }
+  try {
+    const s = await invoke("engine_status");
+    const ok = !!(s && (s.llama || s.sd));
+    setStepMark("step-engine", ok, 2);
+    setText("step-engine-sub", s && s.llama ? "聊天引擎已安装，去运行页启动" : "还没安装，去运行页安装并启动");
+  } catch (e) {
+    setStepMark("step-engine", false, 2);
+  }
+  try {
+    const list = await invoke("list_local_model_info");
+    const ok = !!(list && list.length);
+    setStepMark("step-model", ok, 3);
+    setText("step-model-sub", ok ? "本机已有模型" : "还没下载，去模型页选一个");
+  } catch (e) {
+    setStepMark("step-model", false, 3);
+  }
+}
+function refreshRunEmpty() {
+  const sel = document.getElementById("runmodel");
+  const none = !sel || !sel.value;
+  const empty = document.getElementById("md-empty");
+  const body = document.getElementById("md-body");
+  const text = document.getElementById("md-empty-text");
+  const btn = empty && empty.querySelector("button");
+  if (text) text.textContent = hasTauri() ? "还没选中要运行的模型。" : "网页预览选不了本机模型。";
+  if (btn) btn.textContent = hasTauri() ? "去模型页下载" : "去模型页";
+  if (empty) empty.hidden = !none;
+  if (body) body.hidden = !!none;
+}
+async function refreshCatEmpty() {
+  const box = document.getElementById("cat-empty");
+  const text = document.getElementById("cat-empty-text");
+  const btn = box && box.querySelector("button");
+  if (!box) return;
+  if (!hasTauri()) {
+    box.hidden = false;
+    if (text) text.textContent = "网页预览看不到本机已下载的模型。";
+    if (btn) btn.textContent = "去看推荐模型";
+    return;
+  }
+  try {
+    const list = await invoke("list_local_model_info");
+    const none = !list.length;
+    box.hidden = !none;
+    if (text) text.textContent = "还没有下载模型。";
+    if (btn) btn.textContent = "去下载推荐模型";
+  } catch (e) {
+    box.hidden = false;
+    if (text) text.textContent = "没读到本机模型列表。";
+    if (btn) btn.textContent = "去看推荐模型";
+  }
+}
+async function refreshChatEmpty() {
+  const box = document.getElementById("chat-empty");
+  const text = document.getElementById("chat-empty-text");
+  const btn = box && box.querySelector("button");
+  if (!box) return;
+  if (!hasTauri()) {
+    box.hidden = false;
+    if (text) text.textContent = "网页预览没有聊天服务。";
+    if (btn) btn.textContent = "去运行页";
+    return;
+  }
+  try {
+    const s = await invoke("get_chat_status");
+    box.hidden = !!(s && s.running);
+    if (text) text.textContent = "聊天服务还没启动。";
+    if (btn) btn.textContent = "去运行页启动";
+  } catch (e) {
+    box.hidden = false;
+    if (text) text.textContent = "没确认到聊天服务是否已启动。";
+    if (btn) btn.textContent = "去运行页";
+  }
+}
+function refreshAgentEmpty() {
+  const box = document.getElementById("agent-empty");
+  const input = document.getElementById("afolder");
+  if (!box || !input) return;
+  box.hidden = !!input.value.trim();
+}
+window.focusAgentFolder = function() {
+  const input = document.getElementById("afolder");
+  if (!input) return;
+  input.focus();
+  input.scrollIntoView({ block: "center" });
+};
+window.goDownloadModel = function() {
+  tab("cat");
+  catTab("rec", document.getElementById("sub-rec"));
+  const anchor = document.getElementById("cat-rec");
+  if (anchor) anchor.scrollIntoView({ block: "nearest" });
+};
+function isImageWeight(name) { return /\.(safetensors|ckpt)$/i.test(name || ""); }
+async function refreshMediaEmpty(which) {
+  const box = document.getElementById(which + "-empty");
+  const text = document.getElementById(which + "-empty-text");
+  const btn = document.getElementById(which + "-empty-btn");
+  if (!box || !text || !btn) return;
+  const noun = which === "img" ? "画图" : "视频";
+  if (!hasTauri()) {
+    box.hidden = false;
+    text.textContent = "网页预览看不到" + noun + "引擎和模型。";
+    btn.textContent = "去运行页";
+    btn.onclick = function() { tab("md"); };
+    return;
+  }
+  let sd = null;
+  let infos = [];
+  try { const s = await invoke("engine_status"); sd = s && s.sd; } catch (e) {}
+  try { infos = await invoke("list_local_model_info"); } catch (e) { infos = []; }
+  if (!sd) {
+    box.hidden = false;
+    text.textContent = "还没装" + noun + "引擎。";
+    btn.textContent = "去运行页装引擎";
+    btn.onclick = function() { tab("md"); };
+    return;
+  }
+  if (!infos.some(m => isImageWeight(m.name))) {
+    box.hidden = false;
+    text.textContent = "还没下" + noun + "模型。";
+    btn.textContent = "去模型页下载";
+    btn.onclick = function() { tab("cat"); catTab("img", document.getElementById("sub-img")); };
+    return;
+  }
+  box.hidden = true;
+}
+function refreshImgEmpty() { return refreshMediaEmpty("img"); }
+function refreshVidEmpty() { return refreshMediaEmpty("vid"); }
+(async function() {
   try {
     const v = localStorage.getItem("openloc-theme") || "light"; setTheme(v);
     const p = localStorage.getItem("openloc-port"); if (p) document.getElementById("apiport").value = p;
@@ -360,5 +646,13 @@ window.savePort = function() {
     document.getElementById("auth-agent").checked = authOn("openloc-auth-agent");
     document.getElementById("auth-tray").checked = authOn("openloc-auth-tray");
   } catch (e) {}
-  loadHw(); loadModels();
+  const folder = document.getElementById("afolder");
+  if (folder) folder.addEventListener("input", refreshAgentEmpty);
+  // 首次打开固定落在概览，不恢复上次页面。
+  tab("overview");
+  try {
+    await Promise.all([loadHw(), loadModels(), refreshOverviewSteps(), loadEngineStatus(), refreshChatEmpty(), refreshImgEmpty(), refreshVidEmpty()]);
+  } catch (e) {}
+  refreshAgentEmpty();
+  document.documentElement.setAttribute("data-ready", "1");
 })();
