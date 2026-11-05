@@ -24,7 +24,7 @@ jobs:
       - name: Build Tauri app
         run: npm run tauri build
       - name: Upload bundle
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: openloc-windows
           path: src-tauri/target/release/bundle/
