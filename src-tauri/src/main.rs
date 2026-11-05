@@ -545,6 +545,48 @@ fn list_local_model_info() -> Vec<serde_json::Value> {
     out
 }
 
+
+// ---------- 联网搜索：程序自己去 DuckDuckGo 搜，把结果贴给本地模型 ----------
+fn url_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+fn strip_tags(s: &str) -> String {
+    let mut out = String::new(); let mut in_tag = false;
+    for c in s.chars() { if c == '<' { in_tag = true; } else if c == '>' { in_tag = false; } else if !in_tag { out.push(c); } }
+    out.replace("&amp;", "&").replace("&quot;", "\"").replace("&#x27;", "'").replace("&lt;", "<").replace("&gt;", ">")
+}
+#[tauri::command]
+fn web_search(query: String) -> Result<String, String> {
+    let url = format!("https://html.duckduckgo.com/html/?q={}", url_encode(&query));
+    let client = reqwest::blocking::Client::builder().user_agent("Mozilla/5.0").timeout(std::time::Duration::from_secs(20)).build().map_err(|e| e.to_string())?;
+    let html = client.get(&url).send().map_err(|e| e.to_string())?.text().map_err(|e| e.to_string())?;
+    let mut results = Vec::new(); let mut rest = html.as_str();
+    while results.len() < 5 {
+        let a = match rest.find("result__a") { Some(i) => i, None => break };
+        rest = &rest[a..];
+        let gt = match rest.find('>') { Some(i) => i, None => break };
+        let end = match rest.find("</a>") { Some(i) => i, None => break };
+        let title = strip_tags(&rest[gt+1..end]).trim().to_string();
+        rest = &rest[end..];
+        let s = match rest.find("result__snippet") { Some(i) => i, None => { results.push(format!("{}. {}", results.len()+1, title)); continue; } };
+        rest = &rest[s..];
+        let gt2 = match rest.find('>') { Some(i) => i, None => break };
+        let end2 = match rest.find("</a>") { Some(i) => i, None => break };
+        let snippet = strip_tags(&rest[gt2+1..end2]).trim().to_string();
+        rest = &rest[end2..];
+        if !title.is_empty() { results.push(format!("{}. {}\n{}", results.len()+1, title, snippet)); }
+    }
+    if results.is_empty() { Ok("没搜到相关结果，请换个词再试。".to_string()) } else { Ok(results.join("\n\n")) }
+}
+
 // ---------- 截屏：保存到 outputs，方便用户把图发回来反馈问题 ----------
 #[tauri::command]
 fn take_screenshot() -> Result<String, String> {
@@ -750,6 +792,7 @@ fn main() {
             delete_model,
             search_hf,
             list_local_model_info,
+            web_search,
         ])
         .setup(|app| {
             // 系统托盘：关窗口后程序不退出，托盘小图标还在，点它恢复窗口。
