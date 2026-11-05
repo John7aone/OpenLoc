@@ -17,14 +17,18 @@ nav button.on{background:linear-gradient(135deg,var(--accent),var(--btn));color:
 .sidebar-foot{margin-top:auto;border-top:1px solid var(--border);padding-top:14px}
 .sidebar-foot button{width:100%}
 .main{flex:1;padding:24px 28px;min-width:0;height:100vh;overflow-y:auto}
-.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:20px}
-.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;flex:1;min-width:520px}
-.step{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow);display:flex;gap:12px;align-items:flex-start}
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px}
+.step{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow);display:flex;gap:12px;align-items:center;min-width:0}
+.step-copy{min-width:0;flex:1}
+.step-use{grid-column:1 / -1}
+.step-actions{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px}
+.step > button,.step-actions button{margin:0;flex-shrink:0}
 .step .num{width:28px;height:28px;border-radius:50%;background:var(--soft);border:1px solid var(--border);color:var(--muted);display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
 .step.done .num{background:linear-gradient(135deg,var(--accent),var(--btn));color:#fff;border-color:transparent}
 .step b{display:block;font-size:15px}
 .step small{color:var(--muted);font-size:12px}
-.step .status{margin-left:auto;font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap}
+.step .status{margin-left:auto;font-size:12px;font-weight:700;color:var(--muted);white-space:nowrap}
+.step.done .status{color:var(--accent)}
 .card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:24px;margin:0 0 18px;box-shadow:var(--shadow)}
 .card h2{font-size:22px;margin:0 0 8px}
 .card h3{font-size:17px;margin:0 0 12px}
@@ -40,7 +44,7 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);border-c
 .fill{height:100%}.fill.teal{background:linear-gradient(90deg,var(--accent),var(--btn))}.fill.indigo{background:linear-gradient(90deg,var(--indigo),#818cf8)}.fill.slate{background:#64748b}
 .chatbox{border:1px solid var(--border);min-height:220px;padding:14px;border-radius:14px;background:var(--soft);max-height:420px;overflow-y:auto}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media (max-width:900px){.grid2{grid-template-columns:1fr}.steps{grid-template-columns:1fr;min-width:0}}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}.steps{grid-template-columns:1fr}.step-actions{margin-left:0}}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .row>*{margin:0}
 .mcard{border:1px solid var(--border);border-radius:14px;padding:16px;margin:0 0 12px;background:var(--card)}
@@ -56,7 +60,12 @@ label{font-weight:500}
 .pills button{background:var(--soft);color:var(--text);box-shadow:none;border:1px solid var(--border)}
 .pills button.on{background:linear-gradient(135deg,var(--accent),var(--btn));color:#fff;border-color:transparent}
 .pill-fit{background:#dcfce7;color:#166534;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap}
+.pill-unknown{background:#e2e8f0;color:#475569;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap}
 [data-theme="black"] .pill-fit{background:#14532d;color:#bbf7d0}
+[data-theme="black"] .pill-unknown{background:#262626;color:#d1d5db}
+.empty{border:1px dashed var(--border);border-radius:14px;padding:14px 16px;margin:0 0 16px;background:var(--soft);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.empty p{margin:0}
+.empty[hidden],#md-body[hidden]{display:none !important}
 .hwrows{display:flex;flex-direction:column}
 .hwrow{display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid var(--border);align-items:center}
 .hwrow:last-child{border-bottom:0}
