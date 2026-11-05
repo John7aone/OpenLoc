@@ -825,8 +825,11 @@ fn main() {
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
             let show = MenuItemBuilder::with_id("show", "显示 OpenLoc").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
-            let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+            let hide = MenuItemBuilder::with_id("hide", "隐藏窗口").build(app)?;
+            let chat = MenuItemBuilder::with_id("chat", "开始对话").build(app)?;
+            let models = MenuItemBuilder::with_id("models", "打开模型页").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "退出程序").build(app)?;
+            let menu = MenuBuilder::new(app).items(&[&show, &hide, &chat, &models, &quit]).build()?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().unwrap())
                 .tooltip("OpenLoc（点一下恢复窗口）")
@@ -836,6 +839,19 @@ fn main() {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
                             let _ = w.set_focus();
+                        }
+                    }
+                    "hide" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.hide();
+                        }
+                    }
+                    "chat" | "models" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            let page = if event.id().as_ref() == "chat" { "chat" } else { "cat" };
+                            let _ = w.eval(format!("document.querySelector('[data-page=\"{}\"]')?.click()", page));
                         }
                     }
                     "quit" => app.exit(0),
