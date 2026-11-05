@@ -1,0 +1,17 @@
+{
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  },
+  "name": "openloc",
+  "private": true,
+  "scripts": {
+    "build": "tauri build",
+    "dev": "tauri dev",
+    "tauri": "tauri"
+  },
+  "type": "module",
+  "version": "0.1.0"
+}
