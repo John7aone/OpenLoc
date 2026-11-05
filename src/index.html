@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenLoc</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+<div class="logo"><span class="logo-mark">O</span><div><b>OpenLoc</b><div class="muted small">本地 AI 创作工坊</div></div></div>
+<nav id="nav">
+<button data-page="overview" class="on" onclick="tab('overview',this)"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>概览</button>
+<button data-page="cat" onclick="tab('cat',this)"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>模型</button>
+<button data-page="md" onclick="tab('md',this)"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7-11-7z"/></svg>运行</button>
+<button data-page="chat" onclick="tab('chat',this)"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5z"/></svg>对话</button>
+<button data-page="agent" onclick="tab('agent',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6"/></svg>Agent</button>
+<button data-page="img" onclick="tab('img',this)"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M5 17l5-5 4 4 3-3 2 2"/></svg>画图</button>
+<button data-page="vid" onclick="tab('vid',this)"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9l5 3-5 3V9z"/></svg>视频</button>
+<button data-page="settings" onclick="tab('settings',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>设置</button>
+</nav>
+<div class="sidebar-foot">
+<label>主题风格
+<select id="theme" onchange="setTheme(this.value)">
+<option value="light">浅色</option>
+<option value="black">黑色</option>
+</select></label>
+<div class="muted small">黑色主题是纯黑底，晚上用不刺眼，选完会自动记住。</div>
+</div>
+</aside>
+
+<main class="main">
+<div class="topbar">
+<div class="steps">
+<span class="step done">✓ 1 检测硬件 <small>已自动完成配置</small></span>
+<span class="step">2 安装推理引擎 <small>llama.cpp</small></span>
+<span class="step">3 下载 HF 模型 <small>前往模型页</small></span>
+</div>
+<div class="muted" id="gpu-status">显卡状态：检测中…</div>
+</div>
+
+<div id="overview" class="tab on">
+<div class="card">
+<h2 id="rec-title">检测硬件后，这里会给出推荐</h2>
+<p class="muted" id="rec-desc">点“重新检测硬件”，程序会根据你的显存和内存算一个能流畅跑的模型大小。显存不够时，模型会分到内存里跑，速度会变慢，这是正常的。</p>
+<div class="bars">
+<div><b>显存</b> <span id="vram-text"></span><div class="bar"><div id="vram-bar" class="fill teal"></div></div></div>
+<div><b>内存</b> <span id="mem-text"></span><div class="bar"><div id="mem-bar" class="fill indigo"></div></div></div>
+<div><b>硬盘</b> <span id="disk-text"></span><div class="bar"><div id="disk-bar" class="fill slate"></div></div></div>
+</div>
+<button onclick="loadHw()">重新检测硬件</button>
+</div>
+<div class="card"><h3>本机硬件</h3><pre id="hwout"></pre></div>
+</div>
+
+<div id="cat" class="tab card"><h2>模型</h2>
+<p class="muted">16 个公开推荐模型，均为 Hugging Face 上公开的 unsloth GGUF 仓库。点开一个模型，程序会实时查它的量化文件，选一个就能下载。描述是本程序自己写的，大模型先看“是否适合”再下。</p>
+<button onclick="loadCatalog()">加载目录</button><div id="catalog"></div><div id="catfiles"></div></div>
+
+<div id="md" class="tab card"><h2>运行：模型与引擎</h2>
+<p class="muted">引擎不在安装包里，第一次用时点下载：llama.cpp（聊天）、stable-diffusion.cpp（画图/视频）都是 GitHub 开源项目，免费下载。</p>
+<label>聊天引擎下载地址 <input id="llamaurl" value="https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip"></label>
+<button onclick="dl('engine',document.getElementById('llamaurl').value,'llama.zip')">下载聊天引擎</button>
+<label>画图引擎下载地址 <input id="sdurl" value="https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1043/sd-master-1043-bin-win-cuda12-x64.zip"></label>
+<button onclick="dl('engine',document.getElementById('sdurl').value,'sd.zip')">下载画图引擎（有 NVIDIA 显卡用 CUDA 版，否则换 CPU 版）</button>
+<h3>导入本地已有模型</h3>
+<label>模型完整路径 <input id="importpath" placeholder="例如 C:\Models\qwen.gguf"></label>
+<button onclick="importModel()">导入</button><div id="importmsg" class="muted"></div>
+<h3>已下载的模型</h3><button onclick="loadModels()">刷新</button><ul id="modellist"></ul>
+<div id="dlmsg" class="muted"></div></div>
+
+<div id="chat" class="tab card"><h2>对话</h2>
+<label>选择模型 <select id="chatmodel"></select></label>
+<label>上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384">16K</option><option value="32768">32K</option></select></label>
+<button onclick="startChat()">启动聊天服务</button><button class="sec" onclick="stopChat()">停止</button>
+<div id="chatbox" class="chatbox"></div>
+<label>你说 <textarea id="chatin" rows="3"></textarea></label>
+<button onclick="sendChat()">发送</button></div>
+
+<div id="agent" class="tab card"><h2>Agent：交代一句，它自己动手</h2>
+<p class="muted">安全边界：Agent 只能在你指定的工作文件夹里读写文件、跑命令，超出文件夹、含 ..、删除、格式化等一律拦截。不要把整个文档、桌面或系统盘交给它。Agent 要用聊天服务里的本地模型做计划，先在对话页启动服务；小模型做计划可能不稳定，大模型效果更好。</p>
+<label>工作文件夹（完整路径） <input id="afolder" placeholder="例如 C:\Work\agent-test"></label>
+<label>任务 <textarea id="atask" rows="3" placeholder="例如：在文件夹里新建 hello.txt，内容是 Hello Local AI，然后列出文件夹"></textarea></label>
+<button onclick="runAgent()">开始 Agent</button><pre id="asteps"></pre></div>
+
+<div id="img" class="tab card"><h2>画图</h2>
+<p class="muted">需要先下载画图引擎和一个 SD 模型（.safetensors 也可以导入）。没有 GPU 会很慢，这是实话。</p>
+<label>模型 <select id="imgmodel"></select></label>
+<label>提示词 <textarea id="imgprompt" rows="3" placeholder="例如：a cat sitting by the window, soft light"></textarea></label>
+<label>步数 <input id="imgsteps" type="number" value="20"></label>
+<button onclick="genImg()">生成图片</button><div id="imgmsg" class="muted"></div></div>
+
+<div id="vid" class="tab card"><h2>视频</h2>
+<p><b>方式一：动效视频（ffmpeg）</b>——把一张图做成推近动效，这是动效，不是扩散生成，CPU 就能跑。</p>
+<label>图片完整路径 <input id="vidimg" placeholder="例如 C:\...\outputs\img_xxx.png"></label>
+<button onclick="genMotion()">生成动效视频</button>
+<p><b>方式二：扩散视频（Wan）</b>——调用 sd-cli 的 vid_gen，需要 Wan 视频模型和足够显存，没有会直接报错，不会给你假视频。</p>
+<label>视频模型 <select id="vidmodel"></select></label>
+<label>提示词 <textarea id="vidprompt" rows="2"></textarea></label>
+<button onclick="genVid()">生成扩散视频</button><div id="vidmsg" class="muted"></div></div>
+
+<div id="settings" class="tab card"><h2>设置</h2>
+<label>主题风格
+<select id="theme2" onchange="setTheme(this.value)">
+<option value="light">浅色</option>
+<option value="black">黑色</option>
+</select></label>
+<p class="muted">主题存在本机，下次打开 OpenLoc 还是你选的那个。黑色主题是纯黑背景、深灰卡片、青色按钮。</p>
+<p class="muted">数据文件夹：程序所在目录旁的 data/，里面分 engines（引擎）、models（模型）、outputs（生成的图片和视频）。</p>
+</div>
+
+</main>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>
