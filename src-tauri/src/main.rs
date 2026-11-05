@@ -510,6 +510,40 @@ fn generate_diffusion_video(model: String, prompt: String, frames: u32) -> Resul
 }
 
 
+
+// ---------- 模型管理：删除本地模型、搜索 HuggingFace ----------
+#[tauri::command]
+fn delete_model(name: String) -> Result<String, String> {
+    ensure_dirs();
+    let full = inside(&models_dir(), &name).ok_or("路径不在模型文件夹内")?;
+    std::fs::remove_file(&full).map_err(|e| e.to_string())?;
+    Ok(format!("已删除 {}", name))
+}
+#[tauri::command]
+fn search_hf(query: String) -> Result<Vec<String>, String> {
+    let url = format!("https://huggingface.co/api/models?search={}&limit=20&filter=gguf", query);
+    let resp = reqwest::blocking::get(&url).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    if let Some(arr) = v.as_array() {
+        for m in arr { if let Some(id) = m.get("id").and_then(|x| x.as_str()) { out.push(id.to_string()); } }
+    }
+    Ok(out)
+}
+#[tauri::command]
+fn list_local_model_info() -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(models_dir()) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let gb = e.metadata().map(|m| m.len() as f64 / 1e9).unwrap_or(0.0);
+            out.push(serde_json::json!({"name": name, "size_gb": gb}));
+        }
+    }
+    out.sort_by(|a,b| a["name"].as_str().cmp(&b["name"].as_str()));
+    out
+}
+
 // ---------- 截屏：保存到 outputs，方便用户把图发回来反馈问题 ----------
 #[tauri::command]
 fn take_screenshot() -> Result<String, String> {
@@ -712,6 +746,9 @@ fn main() {
             generate_diffusion_video,
             agent_run,
             take_screenshot,
+            delete_model,
+            search_hf,
+            list_local_model_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
