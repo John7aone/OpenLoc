@@ -37,7 +37,7 @@ window.loadCatalog = async function() {
   el.textContent = "加载中…";
   try {
     const models = await invoke("get_catalog_with_fit");
-    el.innerHTML = models.map(m => `<div style="border-bottom:1px solid #ddd;padding:8px 0"><b>${m.name}</b> ${m.params}<br><span class="muted">${m.desc}</span><br><span class="muted">仓库 ${m.repo} ｜ ${m.fit}</span><br><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div>`).join("");
+    el.innerHTML = models.map(m => `<div class="mcard"><div class="mtitle"><b>${m.name}</b><span>${m.params}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">仓库 ${m.repo} ｜ ${m.fit}</div><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div>`).join("");
   } catch (e) { el.textContent = "失败：" + e; }
 };
 window.showFiles = async function(repo) {
@@ -121,7 +121,7 @@ window.loadInstalled = async function() {
   const el = document.getElementById("installed");
   try {
     const list = await invoke("list_local_model_info");
-    el.innerHTML = list.length ? list.map(m => `<div style="border-bottom:1px solid #ddd;padding:8px 0"><b>${m.name}</b> ${m.size_gb.toFixed(1)} GB <button onclick="delModel('${m.name}')">删除</button></div>`).join("") : "还没有已安装模型，去推荐模型页下一个，或在运行页导入。";
+    el.innerHTML = list.length ? list.map(m => `<div class="mcard"><div class="mtitle"><b>${m.name}</b><span>${m.size_gb.toFixed(1)} GB</span></div><button onclick="delModel('${m.name}')">删除</button></div>`).join("") : "还没有已安装模型，去推荐模型页下一个，或在运行页导入。";
   } catch (e) { el.textContent = "失败：" + e; }
 };
 window.delModel = async function(name) {
@@ -134,7 +134,7 @@ window.loadImgModels = function() {
     ["Qwen-Image", "Qwen 出品，画面里的中英文字最准，适合海报、封面、带字的图。"],
     ["FLUX.1 schnell", "Black Forest Labs 出品，画质标杆，4 步出图，写实照片和插画都强，英文提示词效果最好。"],
   ];
-  document.getElementById("imgmodels").innerHTML = models.map(m => `<div style="border-bottom:1px solid #ddd;padding:8px 0"><b>${m[0]}</b><br><span class="muted">${m[1]}</span><br><button onclick="searchHfName('${m[0]}')">在 HuggingFace 搜这个模型</button></div>`).join("");
+  document.getElementById("imgmodels").innerHTML = models.map(m => `<div class="mcard"><div class="mtitle"><b>${m[0]}</b></div><div class="mdesc">${m[1]}</div><button onclick="searchHfName('${m[0]}')">在 HuggingFace 搜这个模型</button></div>`).join("");
 };
 window.searchHfName = async function(name) {
   catTab("search"); document.getElementById("hfq").value = name; searchHf();
@@ -143,7 +143,7 @@ window.searchHf = async function() {
   const el = document.getElementById("hfres"); el.textContent = "搜索中…";
   try {
     const repos = await invoke("search_hf", { query: document.getElementById("hfq").value });
-    el.innerHTML = repos.length ? repos.map(r => `<div>${r} <button onclick="showFiles('${r}')">查看文件并下载</button></div>`).join("") : "没搜到，换个词试试。";
+    el.innerHTML = repos.length ? repos.map(r => `<div class="mcard"><div class="mtitle"><b>${r}</b><button onclick="showFiles('${r}')">查看文件并下载</button></div></div>`).join("") : "没搜到，换个词试试。";
   } catch (e) { el.textContent = "失败：" + e; }
 };
 window.fillTask = function(s) { document.getElementById("atask").value = s; };
