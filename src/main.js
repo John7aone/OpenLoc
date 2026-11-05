@@ -47,16 +47,22 @@ window.tab = function(id, btn) {
   if (id === "vid") { loadModels(); refreshVidEmpty(); }
   if (id === "settings") loadEngineStatus();
 };
+function normalizeTheme(v) {
+  return (v === "dark" || v === "black") ? "dark" : "light";
+}
 window.toggleTheme = function() {
-  const cur = document.documentElement.getAttribute("data-theme") === "black" ? "black" : "light";
-  setTheme(cur === "black" ? "light" : "black");
+  const cur = normalizeTheme(document.documentElement.getAttribute("data-theme"));
+  setTheme(cur === "dark" ? "light" : "dark");
 };
 window.setTheme = function(v) {
-  document.documentElement.setAttribute("data-theme", v === "light" ? "" : v);
-  const label = v === "black" ? "切换浅色主题" : "切换黑色主题";
-  const a = document.getElementById("themeBtn"); if (a) a.textContent = label;
-  const b = document.getElementById("themeBtn2"); if (b) b.textContent = label;
-  try { localStorage.setItem("openloc-theme", v); } catch (e) {}
+  const theme = normalizeTheme(v);
+  document.documentElement.setAttribute("data-theme", theme);
+  const label = theme === "dark" ? "切换到浅色" : "切换到深色";
+  for (const id of ["themeBtn", "themeBtn2"]) {
+    const el = document.getElementById(id);
+    if (el) el.setAttribute("aria-label", label);
+  }
+  try { localStorage.setItem("openloc-theme", theme); } catch (e) {}
 };
 function setText(id, text) { const n = document.getElementById(id); if (n) n.textContent = text; }
 function showHwUnavailable(reason) {
@@ -157,7 +163,7 @@ function renderRec(models, unknown) {
     const meta = unknown ? m.params : (m.params + " ｜ " + m.fit);
     return `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="${pc}">${p}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${meta}</div></div><div class="mright">${bar}${recButton(m, unknown)}</div></div>`;
   }).join("");
-  el.innerHTML = note + `<div class="feat"><div class="row"><b style="font-size:18px">${top.name}</b><span class="${pillClass}">${pill}</span><span class="muted small">${unknown ? "目录示例" : "主推"}</span></div><div class="mdesc">${top.desc}</div><div class="statrow"><div class="stat"><div class="k">参数</div><div class="v">${top.params}</div></div><div class="stat"><div class="k">适合程度</div><div class="v">${unknown ? "未检测" : top.fit}</div></div><div class="stat"><div class="k">来源</div><div class="v">${top.repo}</div></div></div>${recButton(top, unknown)}</div>` + rest;
+  el.innerHTML = note + `<div class="feat"><div class="row"><b>${top.name}</b><span class="${pillClass}">${pill}</span><span class="muted small">${unknown ? "目录示例" : "主推"}</span></div><div class="mdesc">${top.desc}</div><div class="statrow"><div class="stat"><div class="k">参数</div><div class="v">${top.params}</div></div><div class="stat"><div class="k">适合程度</div><div class="v">${unknown ? "未检测" : top.fit}</div></div><div class="stat"><div class="k">来源</div><div class="v">${top.repo}</div></div></div>${recButton(top, unknown)}</div>` + rest;
 }
 window.loadRecommended = async function() {
   const el = document.getElementById("recmodels"); if (!el) return;
