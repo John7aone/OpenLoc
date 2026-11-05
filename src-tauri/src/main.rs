@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -750,6 +751,45 @@ fn main() {
             search_hf,
             list_local_model_info,
         ])
+        .setup(|app| {
+            // 系统托盘：关窗口后程序不退出，托盘小图标还在，点它恢复窗口。
+            use tauri::menu::{MenuBuilder, MenuItemBuilder};
+            use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+            let show = MenuItemBuilder::with_id("show", "显示 OpenLoc").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+            let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().cloned().unwrap())
+                .tooltip("OpenLoc（点一下恢复窗口）")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { .. } = event {
+                        if let Some(w) = tray.app_handle().get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 点窗口右上角 X：只隐藏窗口，不退出程序，托盘图标还在。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
