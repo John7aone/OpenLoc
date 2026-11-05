@@ -509,6 +509,19 @@ fn generate_diffusion_video(model: String, prompt: String, frames: u32) -> Resul
     Ok(format!("已生成扩散视频：{}", out.display()))
 }
 
+
+// ---------- 截屏：保存到 outputs，方便用户把图发回来反馈问题 ----------
+#[tauri::command]
+fn take_screenshot() -> Result<String, String> {
+    ensure_dirs();
+    let screens = screenshots::Screen::all().map_err(|e| e.to_string())?;
+    let screen = screens.first().ok_or("没有检测到显示器")?;
+    let image = screen.capture().map_err(|e| e.to_string())?;
+    let out = outputs_dir().join(format!("shot_{}.png", chrono_stamp()));
+    image.save(&out).map_err(|e| e.to_string())?;
+    Ok(format!("截图已保存：{}", out.display()))
+}
+
 // ---------- Agent：只能在指定工作文件夹内活动 ----------
 const BLOCKED_CMD: [&str; 9] = [
     "rm -rf", "format", "del /f", "rd /s", "mkfs", "shutdown", "reboot", "sudo rm", "chmod 777 /",
@@ -698,6 +711,7 @@ fn main() {
             generate_motion_video,
             generate_diffusion_video,
             agent_run,
+            take_screenshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
