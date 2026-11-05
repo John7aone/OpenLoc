@@ -30,9 +30,9 @@
 <main class="main">
 <div class="topbar">
 <div class="steps">
-<span class="step done">✓ 1 检测硬件 <small>已自动完成配置</small></span>
-<span class="step">2 安装推理引擎 <small>llama.cpp</small></span>
-<span class="step">3 下载 HF 模型 <small>前往模型页</small></span>
+<div class="step done"><span class="num">✓</span><div><b>1 检测硬件</b><small>已自动完成配置</small></div><span class="status">已完成</span></div>
+<div class="step"><span class="num">2</span><div><b>2 安装推理引擎</b><small>llama.cpp · 画图引擎</small></div><span class="status" style="color:var(--muted)">去设置</span></div>
+<div class="step"><span class="num">3</span><div><b>3 下载 HF 模型</b><small>前往模型页下载</small></div><span class="status" style="color:var(--muted)">去下载</span></div>
 </div>
 <div class="muted" id="gpu-status">显卡状态：检测中…</div>
 </div>
@@ -40,26 +40,25 @@
 <div id="overview" class="tab on">
 <div class="grid2">
 <div class="card">
-<h2 id="rec-title">检测硬件后，这里会给出推荐</h2>
-<p class="muted" id="rec-desc">点“重新检测硬件”，程序会根据你的显存和内存算一个能流畅跑的模型大小。显存不够时，模型会分到内存里跑，速度会变慢，这是正常的。</p>
-<div class="bars">
-<div><div class="row" style="justify-content:space-between"><b>显存</b><span id="vram-text"></span></div><div class="bar"><div id="vram-bar" class="fill teal"></div></div></div>
-<div><div class="row" style="justify-content:space-between"><b>内存</b><span id="mem-text"></span></div><div class="bar"><div id="mem-bar" class="fill indigo"></div></div></div>
-<div><div class="row" style="justify-content:space-between"><b>硬盘</b><span id="disk-text"></span></div><div class="bar"><div id="disk-bar" class="fill slate"></div></div></div>
+<div class="row" style="justify-content:space-between"><h3>本机硬件</h3><button class="sec" onclick="loadHw()">重新检测</button></div>
+<div class="hwrows">
+<div class="hwrow"><div class="hwleft"><span class="hwicon">🎮</span><div><b>显卡</b><div class="muted small" id="hw-gpu-sub"></div></div></div><b id="hw-gpu">检测中…</b></div>
+<div class="hwrow"><div class="hwleft"><span class="hwicon">💻</span><div><b>处理器</b><div class="muted small" id="hw-cpu-sub"></div></div></div><b id="hw-cpu"></b></div>
+<div class="hwrow"><div class="hwleft"><span class="hwicon">🧠</span><div><b>内存</b><div class="muted small" id="hw-mem-sub"></div></div></div><b id="hw-mem"></b></div>
+<div class="hwrow"><div class="hwleft"><span class="hwicon">💾</span><div><b>模型盘</b><div class="muted small" id="hw-disk-sub"></div></div></div><b id="hw-disk"></b></div>
 </div>
+<div class="barlabel"><span>显存</span><span id="vram-text"></span></div><div class="bar"><div id="vram-bar" class="fill teal"></div></div>
+<div class="barlabel"><span>内存</span><span id="mem-text"></span></div><div class="bar"><div id="mem-bar" class="fill indigo"></div></div>
+<div class="barlabel"><span>硬盘</span><span id="disk-text"></span></div><div class="bar"><div id="disk-bar" class="fill slate"></div></div>
+<div class="row" style="margin-top:12px"><button class="sec" onclick="tab('settings')">更改模型盘</button></div>
 </div>
 <div class="card">
-<h3>本机硬件</h3>
-<div class="hwrows">
-<div class="hwrow"><span class="muted">显卡</span><div><b id="hw-gpu">检测中…</b><div class="muted small" id="hw-gpu-sub"></div></div></div>
-<div class="hwrow"><span class="muted">处理器</span><div><b id="hw-cpu"></b><div class="muted small" id="hw-cpu-sub"></div></div></div>
-<div class="hwrow"><span class="muted">内存</span><div><b id="hw-mem"></b><div class="muted small" id="hw-mem-sub"></div></div></div>
-<div class="hwrow"><span class="muted">模型盘</span><div><b id="hw-disk"></b><div class="muted small" id="hw-disk-sub"></div></div></div>
-</div>
-<div class="row"><button onclick="loadHw()">重新检测硬件</button><button class="sec" onclick="tab('settings')">更改模型盘</button></div>
+<h3 id="rec-title">检测硬件后，这里会给出推荐</h3>
+<p class="muted" id="rec-desc">点“重新检测硬件”，程序会根据你的显存和内存算一个能流畅跑的模型大小。显存不够时，模型会分到内存里跑，速度会变慢，这是正常的。</p>
+<div id="recmodels"><p class="muted">正在按你的硬件算推荐…</p></div>
+<button class="sec" onclick="tab('cat')">全部模型</button>
 </div>
 </div>
-<div class="card"><h3>为这台电脑推荐</h3><div id="recmodels"><p class="muted">正在按你的硬件算推荐…</p></div><button class="sec" onclick="tab('cat')">全部模型</button></div>
 </div>
 
 <div id="cat" class="tab card">

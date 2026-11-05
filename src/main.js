@@ -60,7 +60,8 @@ window.loadRecommended = async function() {
     const models = await invoke("get_catalog_with_fit");
     const good = models.filter(m => m.fit.startsWith("适合")).slice(0, 3);
     const list = good.length ? good : models.slice(0, 3);
-    el.innerHTML = list.map(m => `<div class="mcard"><div class="mtitle"><b>${m.name}</b><span class="pill-fit">${fitLabel(m.fit)}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${m.params} ｜ ${m.fit}</div><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div>`).join("");
+    const top = list[0];
+    el.innerHTML = `<div class="feat"><div class="row"><b style="font-size:18px">${top.name}</b><span class="pill-fit">${fitLabel(top.fit)}</span><span class="muted small">主推</span></div><div class="mdesc">${top.desc}</div><div class="statrow"><div class="stat"><div class="k">参数</div><div class="v">${top.params}</div></div><div class="stat"><div class="k">适合程度</div><div class="v">${top.fit}</div></div><div class="stat"><div class="k">来源</div><div class="v">${top.repo}</div></div></div><button onclick="showFiles('${top.repo}')">查看量化文件并下载</button></div>` + list.slice(1).map(m => `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="pill-fit">${fitLabel(m.fit)}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${m.params} ｜ ${m.fit}</div></div><div class="mright"><div class="bar"><div class="fill teal" style="width:${fitLabel(m.fit) === '流畅' ? 90 : 55}%"></div></div><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div></div>`).join("");
   } catch (e) { el.textContent = "失败：" + e; }
 };
 window.loadCatalog = async function() {
@@ -77,7 +78,7 @@ function renderCatalog() {
   let list = catalogCache;
   if (catFilter === 'fit') list = list.filter(m => m.fit.startsWith("适合"));
   else if (catFilter !== 'all') list = list.filter(m => m.cat === catFilter);
-  el.innerHTML = list.length ? list.map(m => `<div class="mcard"><div class="mtitle"><b>${m.name}</b><span>${m.params}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${m.cat} ｜ 仓库 ${m.repo} ｜ ${m.fit}</div><div class="bar"><div class="fill teal" style="width:${fitLabel(m.fit) === '流畅' ? 90 : fitLabel(m.fit) === '能跑' ? 55 : 25}%"></div></div><div class="row"><span class="pill-fit">${fitLabel(m.fit)}</span><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div></div>`).join("") : "这个筛选下没有模型，换个筛选试试。";
+  el.innerHTML = list.length ? list.map(m => `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="pill-fit">${fitLabel(m.fit)}</span></div><div class="mdesc">${m.desc}</div><div class="mmeta">${m.cat} ｜ ${m.params} ｜ 仓库 ${m.repo} ｜ ${m.fit}</div></div><div class="mright"><div class="bar"><div class="fill teal" style="width:${fitLabel(m.fit) === '流畅' ? 90 : fitLabel(m.fit) === '能跑' ? 55 : 25}%"></div></div><button onclick="showFiles('${m.repo}')">查看量化文件并下载</button></div></div>`).join("") : "这个筛选下没有模型，换个筛选试试。";
 }
 window.setFilter = function(f, btn) {
   catFilter = f;
@@ -107,7 +108,7 @@ window.loadInstalled = async function() {
       const quant = (m.name.match(/Q\d+_[A-Z0-9_]+/i) || [""])[0] || "—";
       const fit = m.size_gb <= (h.gpu_vram_gb || 0) ? "流畅" : m.size_gb <= h.memory_total_gb ? "能跑" : "较慢";
       const pct = Math.min(100, m.size_gb / Math.max(1, h.gpu_vram_gb || 8) * 100);
-      return `<div class="mcard"><div class="mtitle"><b>${m.name}</b><span>${quant} · ${m.size_gb.toFixed(1)} GB</span></div><div class="row"><span class="pill-fit">${fit}</span><div class="bar" style="flex:1"><div class="fill teal" style="width:${pct}%"></div></div></div><div class="row"><button class="sec" onclick="openModelFolder('${m.name}')">打开位置</button><button class="sec" onclick="delModel('${m.name}')">删除</button><button onclick="runInstalled('${m.name}')">运行</button></div></div>`;
+      return `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m.name}</b><span class="pill-fit">${fit}</span></div><div class="mmeta">${quant} · ${m.size_gb.toFixed(1)} GB</div><div class="bar"><div class="fill teal" style="width:${pct}%"></div></div></div><div class="mright"><button class="sec" onclick="openModelFolder('${m.name}')">打开位置</button><button class="sec" onclick="delModel('${m.name}')">删除</button><button onclick="runInstalled('${m.name}')">运行</button></div></div>`;
     }).join("") : "还没有已安装模型，去推荐模型页下一个，或在下面导入。";
   } catch (e) { el.textContent = "失败：" + e; }
 };
@@ -130,7 +131,7 @@ window.loadImgModels = function() {
     ["Qwen-Image", "画图", "2025年8月发布", "阿里 Qwen · 画面里的中文、英文文字最准，适合海报、封面、带字的图。", "Q2_K（推荐）", "约 11.2 GB", "较慢", "部分放内存，生成较慢"],
     ["FLUX.1 schnell", "画图", "2024年8月发布", "Black Forest Labs · 画质标杆，4 步出图，写实照片和插画都强，英文提示词效果最好。", "Q3_K（推荐）", "约 14.6 GB", "能跑", "文本编码器放内存"],
   ];
-  document.getElementById("imgmodels").innerHTML = models.map(m => `<div class="mcard"><div class="mtitle"><b>${m[0]}</b><span>${m[1]} · ${m[2]}</span></div><div class="mdesc">${m[3]}</div><div class="mmeta">量化：${m[4]} ｜ 共 ${m[5]}</div><div class="row"><span class="pill-fit">${m[6]}</span><span class="muted small">${m[7]}</span><button onclick="searchHfName('${m[0]}')">在 HuggingFace 搜这个模型</button></div><p class="muted small">大小为约数，以官方仓库为准。</p></div>`).join("");
+  document.getElementById("imgmodels").innerHTML = models.map(m => `<div class="modelrow"><div class="mleft"><div class="mtitle"><b>${m[0]}</b><span class="pill-fit">${m[6]}</span></div><div class="mdesc">${m[3]}</div><div class="mmeta">${m[1]} · ${m[2]} · 量化：${m[4]} ｜ 共 ${m[5]}（约数，以官方仓库为准）</div><div class="muted small">${m[7]}</div></div><div class="mright"><button onclick="searchHfName('${m[0]}')">在 HuggingFace 搜这个模型</button></div></div>`).join("");
 };
 window.searchHfName = async function(name) {
   catTab("search", document.getElementById('sub-search')); document.getElementById("hfq").value = name; searchHf();
