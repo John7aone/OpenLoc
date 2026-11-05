@@ -77,8 +77,15 @@ window.sendChat = async function() {
   const box = document.getElementById("chatbox");
   const msg = document.getElementById("chatin").value;
   box.textContent += "\n你：" + msg + "\n思考中…";
-  try { const r = await invoke("chat_ask", { message: msg }); box.textContent += "\nAI：" + r + "\n"; }
-  catch (e) { box.textContent += "\n失败：" + e + "\n"; }
+  try {
+    let ask = msg;
+    if (document.getElementById("websearch") && document.getElementById("websearch").checked) {
+      const res = await invoke("web_search", { query: msg });
+      box.textContent += "\n联网搜索结果：\n" + res + "\n";
+      ask = "联网搜索结果（仅供参考，回答时以这些结果为准，不要编造更新的信息）：\n" + res + "\n\n用户问题：" + msg;
+    }
+    const r = await invoke("chat_ask", { message: ask }); box.textContent += "\nAI：" + r + "\n";
+  } catch (e) { box.textContent += "\n失败：" + e + "\n"; }
 };
 window.genImg = async function() {
   try { document.getElementById("imgmsg").textContent = await invoke("generate_image", { model: document.getElementById("imgmodel").value, prompt: document.getElementById("imgprompt").value, steps: parseInt(document.getElementById("imgsteps").value), width: 512, height: 512 }); }
