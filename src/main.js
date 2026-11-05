@@ -199,7 +199,29 @@ window.updatePlan = async function() {
     document.getElementById("est-speed").textContent = m.size_gb <= vram ? "流畅" : "能跑";
   } catch (e) {}
 };
+function authOn(key) { try { return localStorage.getItem(key) !== "0"; } catch (e) { return true; } }
+window.saveAuth = async function() {
+  try {
+    localStorage.setItem("openloc-auth-chat", document.getElementById("auth-chat").checked ? "1" : "0");
+    localStorage.setItem("openloc-auth-img", document.getElementById("auth-img").checked ? "1" : "0");
+    localStorage.setItem("openloc-auth-agent", document.getElementById("auth-agent").checked ? "1" : "0");
+    localStorage.setItem("openloc-auth-tray", document.getElementById("auth-tray").checked ? "1" : "0");
+    document.getElementById("authmsg").textContent = await invoke("set_tray_enabled", { enabled: document.getElementById("auth-tray").checked });
+  } catch (e) { document.getElementById("authmsg").textContent = "保存失败：" + e; }
+};
+window.loadBackground = async function() {
+  const el = document.getElementById("bglist"); el.textContent = "查询中…";
+  try {
+    const list = await invoke("list_background");
+    el.innerHTML = list.length ? list.map(x => `<div class="mcard"><div class="mtitle"><b>${x.name}</b><span>PID ${x.pid} · ${x.mem_mb} MB</span></div><button class="sec" onclick="stopBg('${x.name}')">停止这个程序</button></div>`).join("") : "后台没有 OpenLoc 的程序在跑。";
+  } catch (e) { el.textContent = "失败：" + e; }
+};
+window.stopBg = async function(name) {
+  if (!confirm("确定停止 " + name + " 吗？聊天 / 画图服务会停掉。")) return;
+  try { alert(await invoke("stop_process", { name })); loadBackground(); } catch (e) { alert("失败：" + e); }
+};
 window.startRunModel = async function() {
+  if (!authOn("openloc-auth-chat")) { alert("你没授权 OpenLoc 启动聊天服务：去设置 → 授权控制，勾上“允许启动 / 停止聊天服务”。"); return; }
   const m = document.getElementById("runmodel").value; if (!m) { alert("先在模型页下载或导入一个模型。"); return; }
   const ctx = runCtx === 'auto' ? 16384 : runCtx;
   const card = document.getElementById("startcard"); card.style.display = "block";
@@ -292,6 +314,7 @@ document.getElementById("chatin") && document.getElementById("chatin").addEventL
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
 window.genImg = async function() {
+  if (!authOn("openloc-auth-img")) { alert("你没授权 OpenLoc 启动画图引擎：去设置 → 授权控制，勾上“允许启动画图 / 视频引擎”。"); return; }
   try { document.getElementById("imgmsg").textContent = await invoke("generate_image", { model: document.getElementById("imgmodel").value, prompt: document.getElementById("imgprompt").value, steps: parseInt(document.getElementById("imgsteps").value), width: 512, height: 512 }); }
   catch (e) { document.getElementById("imgmsg").textContent = "失败：" + e; }
 };
@@ -300,6 +323,7 @@ window.genMotion = async function() {
   catch (e) { document.getElementById("vidmsg").textContent = "失败：" + e; }
 };
 window.genVid = async function() {
+  if (!authOn("openloc-auth-img")) { alert("你没授权 OpenLoc 启动画图 / 视频引擎：去设置 → 授权控制，勾上“允许启动画图 / 视频引擎”。"); return; }
   try { document.getElementById("vidmsg").textContent = await invoke("generate_diffusion_video", { model: document.getElementById("vidmodel").value, prompt: document.getElementById("vidprompt").value, frames: 25 }); }
   catch (e) { document.getElementById("vidmsg").textContent = "失败：" + e; }
 };
@@ -309,6 +333,7 @@ window.takeShot = async function() {
   catch (e) { if (el) el.textContent = "截屏失败：" + e; alert("截屏失败：" + e); }
 };
 window.runAgent = async function() {
+  if (!authOn("openloc-auth-agent")) { alert("你没授权 Agent 跑命令：去设置 → 授权控制，勾上“允许 Agent 在工作文件夹里跑命令”。"); return; }
   const el = document.getElementById("asteps");
   el.textContent = "Agent 运行中…";
   try { const steps = await invoke("agent_run", { folder: document.getElementById("afolder").value, task: document.getElementById("atask").value }); el.textContent = steps.join("\n"); }
@@ -330,6 +355,10 @@ window.savePort = function() {
     const v = localStorage.getItem("openloc-theme") || "light"; setTheme(v);
     const p = localStorage.getItem("openloc-port"); if (p) document.getElementById("apiport").value = p;
     const l = localStorage.getItem("openloc-lang"); if (l) document.getElementById("langSel").value = l;
+    document.getElementById("auth-chat").checked = authOn("openloc-auth-chat");
+    document.getElementById("auth-img").checked = authOn("openloc-auth-img");
+    document.getElementById("auth-agent").checked = authOn("openloc-auth-agent");
+    document.getElementById("auth-tray").checked = authOn("openloc-auth-tray");
   } catch (e) {}
   loadHw(); loadModels();
 })();

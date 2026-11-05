@@ -24,6 +24,7 @@ struct AppState {
     chat_running: Mutex<bool>,
     chat_model: Mutex<String>,
     chat_port: Mutex<u16>,
+    tray_enabled: Mutex<bool>,
 }
 
 // ---------- 目录 ----------
@@ -436,6 +437,41 @@ fn open_folder(path: String) -> Result<String, String> {
     Ok(format!("已打开：{}", p.display()))
 }
 #[tauri::command]
+fn set_tray_enabled(state: tauri::State<AppState>, enabled: bool) -> String {
+    *state.tray_enabled.lock().unwrap() = enabled;
+    if enabled { "已开启：关闭窗口后隐藏到托盘".to_string() } else { "已关闭：关闭窗口后直接退出程序".to_string() }
+}
+#[tauri::command]
+fn list_background() -> Vec<serde_json::Value> {
+    let sys = System::new_all();
+    let names = ["llama-server", "llama-server.exe", "sd-server", "sd-server.exe", "sd-cli", "sd-cli.exe", "ffmpeg", "ffmpeg.exe"];
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    for proc in sys.processes().values() {
+        let name = proc.name().to_string_lossy().to_string();
+        if names.iter().any(|n| name.eq_ignore_ascii_case(n)) {
+            out.push(serde_json::json!({"name": name, "pid": proc.pid().as_u32(), "mem_mb": proc.memory() / 1024 / 1024}));
+        }
+    }
+    out.sort_by_key(|v| v["pid"].as_u64().unwrap_or(0));
+    out
+}
+#[tauri::command]
+fn stop_process(name: String) -> Result<String, String> {
+    let allowed = ["llama-server", "llama-server.exe", "sd-server", "sd-server.exe", "sd-cli", "sd-cli.exe", "ffmpeg", "ffmpeg.exe"];
+    if !allowed.iter().any(|n| name.eq_ignore_ascii_case(n)) {
+        return Err("只能停止 OpenLoc 自己的后台程序（llama-server / sd-server / sd-cli / ffmpeg），不碰其他程序".to_string());
+    }
+    let sys = System::new_all();
+    let mut n = 0;
+    for proc in sys.processes().values() {
+        if proc.name().to_string_lossy().eq_ignore_ascii_case(&name) {
+            if proc.kill() { n += 1; }
+        }
+    }
+    if n == 0 { return Err(format!("{} 没有在运行", name)); }
+    Ok(format!("已停止 {}（{} 个进程）", name, n))
+}
+#[tauri::command]
 fn engine_status() -> serde_json::Value {
     serde_json::json!({"llama": find_llama_server().map(|p| p.to_string_lossy().to_string()), "sd": find_sd_cli().map(|p| p.to_string_lossy().to_string())})
 }
@@ -795,7 +831,7 @@ fn extract_content(task: &str) -> Option<String> {
 fn main() {
     ensure_dirs();
     tauri::Builder::default()
-        .manage(AppState::default())
+        .manage(AppState { chat_running: Mutex::new(false), chat_model: Mutex::new(String::new()), chat_port: Mutex::new(0), tray_enabled: Mutex::new(true) })
         .invoke_handler(tauri::generate_handler![
             get_hardware,
             get_catalog,
@@ -818,6 +854,9 @@ fn main() {
             get_chat_status,
             open_folder,
             engine_status,
+            set_tray_enabled,
+            list_background,
+            stop_process,
             web_search,
         ])
         .setup(|app| {
@@ -869,10 +908,14 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 点窗口右上角 X：只隐藏窗口，不退出程序，托盘图标还在。
+            // 点窗口右上角 X：默认只隐藏窗口，不退出程序，托盘图标还在。
+            // 用户在设置里关了“后台常驻”时，点 X 就直接退出。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+                let tray_on = window.state::<AppState>().tray_enabled.lock().map(|v| *v).unwrap_or(true);
+                if tray_on {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
             }
         })
         .run(tauri::generate_context!())
