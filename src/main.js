@@ -45,7 +45,7 @@ window.showFiles = async function(repo) {
   el.textContent = "查询 HuggingFace 文件列表中…";
   try {
     const files = await invoke("list_hf_files", { repo });
-    el.innerHTML = "<b>" + repo + "</b><br>" + files.map(f => `${f} <button onclick="dlCat('${repo}','${f}')">下载</button>`).join("<br>");
+    el.innerHTML = "<b>" + repo + "</b><br>" + files.map(f => `${f} <button onclick="dlCat('${repo}','${f}')">下载</button>`).join("<br>"); const hf = document.getElementById("hfres"); if (hf) hf.innerHTML = el.innerHTML;
   } catch (e) { el.textContent = "失败：" + e; }
 };
 window.dlCat = async function(repo, f) {
@@ -59,7 +59,7 @@ window.dl = async function(kind, url, filename) {
 window.loadModels = async function() {
   const list = await invoke("list_local_models");
   document.getElementById("modellist").innerHTML = list.map(m => `<li>${m}</li>`).join("");
-  for (const id of ["chatmodel", "imgmodel", "vidmodel"]) {
+  for (const id of ["chatmodel", "imgmodel", "vidmodel", "runmodel"]) {
     const sel = document.getElementById(id);
     if (sel) sel.innerHTML = list.map(m => `<option value="${m}">${m}</option>`).join("");
   }
@@ -103,6 +103,53 @@ window.runAgent = async function() {
   try { const steps = await invoke("agent_run", { folder: document.getElementById("afolder").value, task: document.getElementById("atask").value }); el.textContent = steps.join("\n"); }
   catch (e) { el.textContent = "失败：" + e; }
 };
+
+window.catTab = function(which, btn) {
+  for (const id of ["cat-rec","cat-inst","cat-img","cat-search"]) document.getElementById(id).style.display = "none";
+  document.getElementById("cat-"+which).style.display = "block";
+  if (which === "inst") loadInstalled();
+  if (which === "img") loadImgModels();
+};
+window.loadInstalled = async function() {
+  const el = document.getElementById("installed");
+  try {
+    const list = await invoke("list_local_model_info");
+    el.innerHTML = list.length ? list.map(m => `<div style="border-bottom:1px solid #ddd;padding:8px 0"><b>${m.name}</b> ${m.size_gb.toFixed(1)} GB <button onclick="delModel('${m.name}')">删除</button></div>`).join("") : "还没有已安装模型，去推荐模型页下一个，或在运行页导入。";
+  } catch (e) { el.textContent = "失败：" + e; }
+};
+window.delModel = async function(name) {
+  if (!confirm("确定删除 " + name + " 吗？")) return;
+  try { alert(await invoke("delete_model", { name })); loadInstalled(); } catch (e) { alert("失败：" + e); }
+};
+window.loadImgModels = function() {
+  const models = [
+    ["Z-Image Turbo", "通义出品，速度快，8 步出图，中文提示词友好，适合先跑起来试手。"],
+    ["Qwen-Image", "Qwen 出品，画面里的中英文字最准，适合海报、封面、带字的图。"],
+    ["FLUX.1 schnell", "Black Forest Labs 出品，画质标杆，4 步出图，写实照片和插画都强，英文提示词效果最好。"],
+  ];
+  document.getElementById("imgmodels").innerHTML = models.map(m => `<div style="border-bottom:1px solid #ddd;padding:8px 0"><b>${m[0]}</b><br><span class="muted">${m[1]}</span><br><button onclick="searchHfName('${m[0]}')">在 HuggingFace 搜这个模型</button></div>`).join("");
+};
+window.searchHfName = async function(name) {
+  catTab("search"); document.getElementById("hfq").value = name; searchHf();
+};
+window.searchHf = async function() {
+  const el = document.getElementById("hfres"); el.textContent = "搜索中…";
+  try {
+    const repos = await invoke("search_hf", { query: document.getElementById("hfq").value });
+    el.innerHTML = repos.length ? repos.map(r => `<div>${r} <button onclick="showFiles('${r}')">查看文件并下载</button></div>`).join("") : "没搜到，换个词试试。";
+  } catch (e) { el.textContent = "失败：" + e; }
+};
+window.fillTask = function(s) { document.getElementById("atask").value = s; };
+window.newChat = function() { document.getElementById("chatbox").textContent = ""; document.getElementById("chatin").value = ""; };
+window.startRunModel = async function() {
+  try {
+    const m = document.getElementById("runmodel").value;
+    const ctx = document.getElementById("runctx").value;
+    const r = await invoke("start_chat", { model: m, ctx: ctx === "auto" ? 16384 : parseInt(ctx) });
+    document.getElementById("runmsg").textContent = r + "（思考模式：" + (document.getElementById("thinkmode").checked ? "开" : "关") + "，仅支持思考的模型有效）";
+  } catch (e) { document.getElementById("runmsg").textContent = "失败：" + e; }
+};
+
 (function() {
   try { const v = localStorage.getItem("openloc-theme") || "light"; setTheme(v); } catch (e) {}
   loadHw(); loadModels();
