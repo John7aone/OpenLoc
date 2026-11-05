@@ -124,12 +124,47 @@
 <div class="chatwrap">
 <div class="chatlist"><button onclick="newChat()">+ 新对话</button><div class="mcard" id="chat-history"><b>你好</b><div class="muted small">当前对话</div></div></div>
 <div class="chatmain">
-<div class="row" style="justify-content:space-between"><select id="chatmodel" style="flex:1;margin:0"></select><span class="muted">思考：开</span><button class="sec" id="netBtn" onclick="toggleNet()">本机运行 · 不联网</button></div>
-<div id="chatbox" class="chatbox"></div>
-<label>你说 <textarea id="chatin" rows="3" placeholder="问点什么，或者说「画一只…」（Enter 发送，Shift+Enter 换行）"></textarea></label>
-<div class="row"><button onclick="sendChat()">发送</button><span class="muted small">先在“运行”页启动一个模型；画图、做视频不用启动聊天服务。</span></div>
-<div class="row"><button class="sec" onclick="alert('附件：本地模型目前只支持文字，图片附件暂不支持直接发给它。')">附件</button><button class="sec" onclick="tab('agent')">工具</button><button class="sec" onclick="tab('agent')">操作电脑</button><button class="sec" onclick="tab('img')">画图</button><button class="sec" onclick="tab('vid')">视频</button><button class="sec" onclick="tab('settings')">对话设置</button><button class="sec" onclick="takeShot()">截屏</button><button class="sec" id="netBtn2" onclick="toggleNet()">联网</button></div>
-<label>上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384" selected>16K</option><option value="32768">32K</option></select></label>
+<div class="chat-head">
+<div class="model-pill">
+<span class="dot" id="modelDot" title="本地模型未启动"></span>
+<select id="chatmodel" aria-label="本地模型"><option value="">本地模型：还没有启动</option></select>
+</div>
+<div class="chat-head-right">
+<span class="think-flag">思考：开</span>
+<button type="button" id="netBtn" class="net-switch" role="switch" aria-checked="false" onclick="toggleNet()" title="切换联网。默认不联网。打开后只记录偏好；检索没接上时不会编造搜索结果。">
+<span class="net-track" aria-hidden="true"><span class="net-knob"></span></span>
+<span id="netLabel">本机运行 · 不联网</span>
+</button>
+</div>
+</div>
+<div id="chatbox" class="chatbox">
+<div id="chat-empty" class="chat-empty">
+<b>本地模型还没有启动</b>
+<p>先在“运行”页启动一个模型，再在这里发消息。</p>
+</div>
+</div>
+<div class="composer">
+<div id="chat-attach" class="attach-strip" hidden></div>
+<textarea id="chatin" rows="3" placeholder="问点什么，或者说「画一只…」（Enter 发送，Shift+Enter 换行）"></textarea>
+<div class="composer-hint">先在“运行”页启动一个模型；画图、做视频不用启动聊天服务。</div>
+<div class="composer-bar">
+<div class="composer-tools">
+<button type="button" class="toolbtn" onclick="pickAttach()" title="添加附件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5l6.2-6.2a3 3 0 014.2 4.2l-7.4 7.4a4.5 4.5 0 01-6.4-6.4l6.8-6.8"/></svg>附件</button>
+<button type="button" class="toolbtn" id="shotBtn" onclick="captureForChat()" title="截图并放入当前对话。网页预览不可截屏，桌面版可用。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
+<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('nav [data-page=agent]'))" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
+<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('nav [data-page=agent]'))" title="操作电脑"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>操作电脑</button>
+<button type="button" class="toolbtn" onclick="tab('img', document.querySelector('nav [data-page=img]'))" title="画图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l5-4 3 3 3-2 3 3"/></svg>画图</button>
+<button type="button" class="toolbtn" onclick="tab('vid', document.querySelector('nav [data-page=vid]'))" title="视频"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9.2l5 2.8-5 2.8z"/></svg>视频</button>
+<button type="button" class="toolbtn" onclick="tab('settings', document.querySelector('nav [data-page=settings]'))" title="对话设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h16"/><circle cx="16" cy="12" r="2"/></svg>对话设置</button>
+</div>
+<button type="button" class="sendbtn" onclick="sendChat()" title="发送" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></svg></button>
+</div>
+<div id="composer-note" class="composer-note" role="status" aria-live="polite" hidden></div>
+<div class="composer-foot">
+<label class="ctx-line">上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384" selected>16K</option><option value="32768">32K</option></select></label>
+</div>
+</div>
+<input id="chatfile" type="file" multiple hidden accept="image/*,.txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.gif">
 </div>
 </div>
 </div>

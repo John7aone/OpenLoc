@@ -4,6 +4,98 @@ let catalogCache = [];
 let catFilter = 'fit';
 let runCtx = 'auto';
 let webOn = false;
+let chatAttachments = [];
+function hasTauri() {
+  return !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
+}
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function setComposerNote(text) {
+  const el = document.getElementById("composer-note");
+  if (!el) return;
+  el.textContent = text || "";
+  el.hidden = !text;
+}
+function renderAttachments() {
+  const el = document.getElementById("chat-attach");
+  if (!el) return;
+  el.replaceChildren();
+  if (!chatAttachments.length) { el.hidden = true; return; }
+  el.hidden = false;
+  chatAttachments.forEach((a, i) => {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    if (a.url) {
+      const img = document.createElement("img");
+      img.src = a.url;
+      img.alt = "";
+      chip.appendChild(img);
+    } else {
+      const badge = document.createElement("span");
+      badge.className = "attach-badge";
+      badge.textContent = a.kind === "image" ? "图" : "件";
+      chip.appendChild(badge);
+    }
+    const name = document.createElement("span");
+    name.className = "attach-name";
+    name.textContent = a.name;
+    name.title = a.path || a.name;
+    chip.appendChild(name);
+    if (a.mode) {
+      const mode = document.createElement("span");
+      mode.className = "attach-mode";
+      mode.textContent = a.mode === "region" ? "选区" : "整屏";
+      chip.appendChild(mode);
+    }
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "attach-x";
+    x.title = "移除附件";
+    x.setAttribute("aria-label", "移除附件 " + a.name);
+    x.textContent = "×";
+    x.onclick = function() { removeAttach(i); };
+    chip.appendChild(x);
+    el.appendChild(chip);
+  });
+}
+function clearAttachments() {
+  for (const a of chatAttachments) { if (a.url) URL.revokeObjectURL(a.url); }
+  chatAttachments = [];
+  renderAttachments();
+}
+function removeAttach(i) {
+  const a = chatAttachments[i];
+  if (a && a.url) URL.revokeObjectURL(a.url);
+  chatAttachments.splice(i, 1);
+  renderAttachments();
+}
+function applyNet(on) {
+  webOn = !!on;
+  const btn = document.getElementById("netBtn");
+  const label = document.getElementById("netLabel");
+  if (btn) btn.setAttribute("aria-checked", webOn ? "true" : "false");
+  if (label) label.textContent = webOn ? "允许联网" : "本机运行 · 不联网";
+  try { localStorage.setItem("openloc-web", webOn ? "1" : "0"); } catch (e) {}
+}
+function onChatFiles(ev) {
+  const input = ev.target;
+  const files = input.files ? Array.from(input.files) : [];
+  for (const f of files) {
+    const image = (f.type || "").startsWith("image/");
+    chatAttachments.push({
+      name: f.name,
+      kind: image ? "image" : "file",
+      url: image ? URL.createObjectURL(f) : "",
+      path: "",
+      mode: "",
+      source: "file",
+    });
+  }
+  input.value = "";
+  renderAttachments();
+  if (files.length) setComposerNote("已加入当前对话附件。发送时只记下文件名：图片不会上传，本地模型目前只接收文字。");
+}
 function getPort() { try { return parseInt(localStorage.getItem('openloc-port') || '8080'); } catch (e) { return 8080; } }
 window.tab = function(id, btn) {
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("on"));
@@ -162,13 +254,48 @@ window.dl = async function(kind, url, filename) {
 window.loadEngineStatus = async function() {
   try { const s = await invoke("engine_status"); const el = document.getElementById("engine-info"); if (el) el.textContent = "聊天引擎：" + (s.llama ? "已安装（" + s.llama + "）" : "未安装") + "；画图引擎：" + (s.sd ? "已安装" : "未安装") + "。引擎不在安装包里，第一次用时点下载，免费。"; } catch (e) {}
 };
-window.loadModels = async function() {
-  const list = await invoke("list_local_models");
-  document.getElementById("modellist") && (document.getElementById("modellist").innerHTML = list.map(m => `<li>${m}</li>`).join(""));
-  for (const id of ["chatmodel", "imgmodel", "vidmodel", "runmodel"]) {
-    const sel = document.getElementById(id);
-    if (sel) sel.innerHTML = list.map(m => `<option value="${m}">${m}</option>`).join("");
+async function refreshChatModel() {
+  const dot = document.getElementById("modelDot");
+  if (!dot) return;
+  if (!hasTauri()) {
+    dot.classList.remove("on");
+    dot.title = "本地模型未启动";
+    return;
   }
+  try {
+    const s = await invoke("get_chat_status");
+    const on = !!s.running;
+    dot.classList.toggle("on", on);
+    dot.title = on ? "本地模型运行中" : "本地模型未启动";
+    const sel = document.getElementById("chatmodel");
+    if (sel && on && s.model && [...sel.options].some((o) => o.value === s.model)) sel.value = s.model;
+  } catch (e) {
+    dot.classList.remove("on");
+    dot.title = "本地模型未启动";
+  }
+}
+window.loadModels = async function() {
+  let list;
+  try { list = await invoke("list_local_models"); }
+  catch (e) {
+    const chatSel = document.getElementById("chatmodel");
+    if (chatSel && chatSel.options.length === 0) chatSel.innerHTML = '<option value="">本地模型：还没有启动</option>';
+    refreshChatModel();
+    return;
+  }
+  const ml = document.getElementById("modellist");
+  if (ml) ml.innerHTML = list.map((m) => `<li>${escHtml(m)}</li>`).join("");
+  const chatSel = document.getElementById("chatmodel");
+  if (chatSel) {
+    const prev = chatSel.value;
+    chatSel.innerHTML = '<option value="">本地模型：还没有启动</option>' + list.map((m) => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join("");
+    chatSel.value = prev && list.includes(prev) ? prev : "";
+  }
+  for (const id of ["imgmodel", "vidmodel", "runmodel"]) {
+    const sel = document.getElementById(id);
+    if (sel) sel.innerHTML = list.map((m) => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join("");
+  }
+  refreshChatModel();
   updatePlan();
 };
 window.importModel = async function() {
@@ -278,36 +405,104 @@ window.startChat = async function() {
 };
 window.stopChat = async function() { alert(await invoke("stop_chat")); };
 window.toggleNet = function() {
-  webOn = !webOn;
-  const label = webOn ? "本机运行 · 已联网" : "本机运行 · 不联网";
-  const a = document.getElementById("netBtn"); if (a) a.textContent = label;
-  const b = document.getElementById("netBtn2"); if (b) b.textContent = webOn ? "联网：开" : "联网";
+  applyNet(!webOn);
+  if (webOn) {
+    setComposerNote(hasTauri()
+      ? "已记下「允许联网」。发送时会尝试检索；失败会说明原因，不会编造搜索结果。"
+      : "已记下「允许联网」。网页预览没有联网检索，发送时不会附带搜索结果。");
+  } else {
+    setComposerNote("已切换为「本机运行 · 不联网」。发送时不会检索。");
+  }
+};
+window.pickAttach = function() {
+  const input = document.getElementById("chatfile");
+  if (input) input.click();
+};
+window.captureForChat = async function() {
+  if (!hasTauri()) {
+    setComposerNote("网页预览不可截屏，桌面版可用。没有贴上图片。");
+    return;
+  }
+  setComposerNote("正在打开截屏…");
+  try {
+    const shot = await invoke("capture_chat_image");
+    if (!shot || !shot.name || !shot.path) {
+      setComposerNote("没有贴上图片。桌面版没有返回截图文件。");
+      return;
+    }
+    chatAttachments.push({
+      name: shot.name,
+      kind: "image",
+      url: "",
+      path: shot.path,
+      mode: shot.mode === "region" ? "region" : "screen",
+      source: "screenshot",
+    });
+    renderAttachments();
+    const how = shot.mode === "region" ? "系统选区" : "整屏";
+    setComposerNote("已把" + how + "截图加入当前对话附件（" + shot.name + "）。图片留在本机，没有上传。");
+  } catch (e) {
+    setComposerNote("没有贴上图片。" + e);
+  }
 };
 function addMsg(role, text) {
   const box = document.getElementById("chatbox");
+  const empty = document.getElementById("chat-empty");
+  if (empty) empty.hidden = true;
   const d = document.createElement("div");
   d.className = role === "user" ? "msg-user" : "msg-ai";
   d.textContent = (role === "user" ? "你：" : "AI：") + text;
   box.appendChild(d); box.scrollTop = box.scrollHeight;
+  return d;
 }
 window.sendChat = async function() {
-  const msg = document.getElementById("chatin").value.trim(); if (!msg) return;
+  const raw = document.getElementById("chatin").value.trim();
+  const atts = chatAttachments.slice();
+  if (!raw && !atts.length) return;
   document.getElementById("chatin").value = "";
-  addMsg("user", msg);
-  addMsg("ai", "思考中…");
-  try {
-    let ask = msg;
-    if (webOn) {
-      const res = await invoke("web_search", { query: msg });
-      addMsg("ai", "联网搜索结果：\n" + res);
-      ask = "联网搜索结果（仅供参考，回答时以这些结果为准，不要编造更新的信息）：\n" + res + "\n\n用户问题：" + msg;
+  setComposerNote("");
+  const names = atts.map((a) => a.name).join("、");
+  let shown = raw;
+  if (atts.length) {
+    const tail = "（本机附件：" + names + "。只留在这条对话里，没有上传；本地模型目前只接收文字。）";
+    shown = raw ? raw + "\n" + tail : tail;
+  }
+  addMsg("user", shown);
+  clearAttachments();
+  if (!raw) {
+    addMsg("ai", "附件已记在上面。没有文字问题，这次没有发给模型，也没有把图片当成已识别的内容。");
+    return;
+  }
+  let ask = raw;
+  if (atts.length) ask += "\n（用户在本机附了文件，当前接口只接收文字，你看不到文件内容：" + names + "）";
+  if (webOn) {
+    if (!hasTauri()) {
+      addMsg("ai", "已记录「允许联网」。网页预览没有接上联网检索，本次没有搜索结果，也不会编造。");
+    } else {
+      try {
+        const res = await invoke("web_search", { query: raw });
+        const empty = !res || res.indexOf("没搜到") === 0;
+        if (empty) {
+          addMsg("ai", "联网检索没有返回可用结果。本次只把原问题发给本地模型，不附带搜索摘要。");
+        } else {
+          addMsg("ai", "联网检索结果（下面是检索返回的内容，不是模型编造）：\n" + res);
+          ask = "联网搜索结果（仅供参考，回答时以这些结果为准，不要编造更新的信息）：\n" + res + "\n\n用户问题：" + ask;
+        }
+      } catch (e) {
+        addMsg("ai", "联网检索没有接上（" + e + "）。已记录「允许联网」偏好，本次不附带搜索结果。");
+      }
     }
+  }
+  if (!hasTauri()) {
+    addMsg("ai", "网页预览没有本地模型。请在桌面版的「运行」页启动后再发。这次没有生成回复。");
+    return;
+  }
+  const pending = addMsg("ai", "思考中…");
+  try {
     const r = await invoke("chat_ask", { message: ask });
-    const box = document.getElementById("chatbox");
-    if (box.lastChild) box.lastChild.textContent = "AI：" + r;
+    pending.textContent = r ? "AI：" + r : "AI：（本地模型返回了空内容）";
   } catch (e) {
-    const box = document.getElementById("chatbox");
-    if (box.lastChild) box.lastChild.textContent = "失败：" + e;
+    pending.textContent = "本地模型没有回应：" + e + "。没有编造回复。";
   }
 };
 document.getElementById("chatin") && document.getElementById("chatin").addEventListener("keydown", function(e) {
@@ -340,7 +535,15 @@ window.runAgent = async function() {
   catch (e) { el.textContent = "失败：" + e; }
 };
 window.fillTask = function(s) { document.getElementById("atask").value = s; };
-window.newChat = function() { document.getElementById("chatbox").innerHTML = ""; document.getElementById("chatin").value = ""; };
+window.newChat = function() {
+  const box = document.getElementById("chatbox");
+  box.querySelectorAll(".msg-user,.msg-ai").forEach((n) => n.remove());
+  const empty = document.getElementById("chat-empty");
+  if (empty) empty.hidden = false;
+  document.getElementById("chatin").value = "";
+  clearAttachments();
+  setComposerNote("");
+};
 window.saveLang = function(v) {
   try { localStorage.setItem("openloc-lang", v); } catch (e) {}
   document.getElementById("langmsg").textContent = v === "en" ? "界面目前只有简体中文，选 English 暂不翻译，下一版再做英文界面。" : "已保存：跟随系统（简体中文）。界面目前只有简体中文。";
@@ -359,6 +562,9 @@ window.savePort = function() {
     document.getElementById("auth-img").checked = authOn("openloc-auth-img");
     document.getElementById("auth-agent").checked = authOn("openloc-auth-agent");
     document.getElementById("auth-tray").checked = authOn("openloc-auth-tray");
+    applyNet(localStorage.getItem("openloc-web") === "1");
   } catch (e) {}
+  const file = document.getElementById("chatfile");
+  if (file) file.addEventListener("change", onChatFiles);
   loadHw(); loadModels();
 })();
