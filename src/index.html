@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,7 +9,7 @@
 <body>
 <div class="layout">
 <aside class="sidebar">
-<div class="logo"><span class="logo-mark">O</span><div><b>OpenLoc</b><div class="muted small">本地 AI 创作工坊</div></div></div>
+<div class="logo"><span class="logo-mark">OL</span><div><b>OpenLoc</b><div class="muted small">本地 AI 创作工坊</div></div></div>
 <nav id="nav">
 <button type="button" data-page="overview" class="on" aria-current="page" onclick="tab('overview',this)"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>概览</button>
 <button type="button" data-page="cat" onclick="tab('cat',this)"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>模型</button>
@@ -21,8 +21,8 @@
 <button type="button" data-page="settings" onclick="tab('settings',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>设置</button>
 </nav>
 <div class="sidebar-foot">
-<button id="themeBtn" onclick="toggleTheme()">切换黑色主题</button>
-<div class="muted small">点一下换浅色 / 黑色，选完会自动记住。</div>
+<button id="themeBtn" type="button" onclick="toggleTheme()">切换深色主题</button>
+<div class="muted small">点一下换深色 / 浅色，选完会自动记住。</div>
 <button onclick="takeShot()">截屏保存</button><div id="shotmsg" class="muted small"></div>
 </div>
 </aside>
@@ -174,7 +174,7 @@
 <button onclick="genVid()">生成扩散视频</button><div id="vidmsg" class="muted"></div></div>
 
 <div id="settings" class="tab card"><h2>设置</h2>
-<div class="mcard"><b>主题风格</b><p class="muted">主题存在本机，下次打开 OpenLoc 还是你选的那个。黑色主题是纯黑背景、深灰卡片、青色按钮。</p><button id="themeBtn2" onclick="toggleTheme()">切换黑色主题</button></div>
+<div class="mcard"><b>主题风格</b><p class="muted">主题存在本机，下次打开 OpenLoc 还是你选的那个。深色是海军蓝底、抬升卡片；浅色是灰白底。主色是蓝。</p><button id="themeBtn2" type="button" onclick="toggleTheme()">切换深色主题</button></div>
 <div class="mcard"><b>模型存放</b><p class="muted">模型默认存在程序旁的 data/models/。已下载的模型不会自动搬家。</p><div class="row"><button onclick="openModelsFolder()">打开模型文件夹</button><button class="sec" onclick="openDataFolder()">打开数据目录</button></div></div>
 <div class="mcard"><b>界面语言</b><select id="langSel" onchange="saveLang(this.value)"><option value="system">跟随系统（简体中文）</option><option value="zh">简体中文</option><option value="en">English</option></select><p class="muted" id="langmsg">界面目前只有简体中文，选 English 暂不翻译，下一版再做英文界面。</p></div>
 <div class="mcard"><b>显卡</b><p class="muted" id="gpu-info">检测中…</p><div class="row"><button onclick="loadHw()">重新检测</button><button class="sec" onclick="alert('手动指定显卡：目前只支持自动检测到的 NVIDIA 显卡，检测不到时请在运行页用 CPU 模式。')">手动指定</button></div></div>
