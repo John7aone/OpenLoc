@@ -56,8 +56,13 @@
 </div>
 
 <div id="cat" class="tab card"><h2>模型</h2>
-<p class="muted">16 个公开推荐模型，均为 Hugging Face 上公开的 unsloth GGUF 仓库。点开一个模型，程序会实时查它的量化文件，选一个就能下载。描述是本程序自己写的，大模型先看“是否适合”再下。</p>
-<button onclick="loadCatalog()">加载目录</button><div id="catalog"></div><div id="catfiles"></div></div>
+<p class="muted">16 个公开推荐模型，均为 Hugging Face 上公开的 unsloth GGUF 仓库。描述是本程序自己写的，大模型先看“是否适合”再下。</p>
+<div><button onclick="catTab('rec',this)">推荐模型</button> <button onclick="catTab('inst',this)">已安装</button> <button onclick="catTab('img',this)">画图 / 视频模型</button> <button onclick="catTab('search',this)">搜索 HuggingFace</button></div>
+<div id="cat-rec"><button onclick="loadCatalog()">加载目录</button><div id="catalog"></div><div id="catfiles"></div></div>
+<div id="cat-inst" style="display:none"><button onclick="loadInstalled()">刷新已安装</button><div id="installed"></div><p class="muted">已安装就是 data/models 文件夹里的文件。点“删除”会把文件删掉，删前请确认；点“在运行页启动”会跳到运行页选它。</p></div>
+<div id="cat-img" style="display:none"><p class="muted">画图 / 视频模型不是聊天模型，要配合画图页、视频页的引擎用，大小以官方仓库为准，别只看名字。</p><div id="imgmodels"></div></div>
+<div id="cat-search" style="display:none"><label>搜 HuggingFace 上的 GGUF 模型 <input id="hfq" placeholder="例如 qwen3.5、gemma-4、glm"></label><button onclick="searchHf()">搜索</button><div id="hfres"></div></div>
+</div>
 
 <div id="md" class="tab card"><h2>运行：模型与引擎</h2>
 <p class="muted">引擎不在安装包里，第一次用时点下载：llama.cpp（聊天）、stable-diffusion.cpp（画图/视频）都是 GitHub 开源项目，免费下载。</p>
@@ -65,6 +70,12 @@
 <button onclick="dl('engine',document.getElementById('llamaurl').value,'llama.zip')">下载聊天引擎</button>
 <label>画图引擎下载地址 <input id="sdurl" value="https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1043/sd-master-1043-bin-win-cuda12-x64.zip"></label>
 <button onclick="dl('engine',document.getElementById('sdurl').value,'sd.zip')">下载画图引擎（有 NVIDIA 显卡用 CUDA 版，否则换 CPU 版）</button>
+<h3>运行规划</h3>
+<label>选择已下载模型 <select id="runmodel"></select></label>
+<label>上下文 <select id="runctx"><option value="auto">自动</option><option value="8192">8K</option><option value="16384">16K</option><option value="32768">32K</option><option value="65536">64K</option></select></label>
+<label><input type="checkbox" id="thinkmode" checked> 思考模式（先想再答，仅支持思考的模型有效）</label>
+<p class="muted" id="runplan">选一个模型后，这里会按你的显存给一句能不能流畅跑的判断。上下文越长越占显存，自动就是选不降速的最大值。</p>
+<button onclick="startRunModel()">启动这个模型（供对话页用）</button><div id="runmsg" class="muted"></div>
 <h3>导入本地已有模型</h3>
 <label>模型完整路径 <input id="importpath" placeholder="例如 C:\Models\qwen.gguf"></label>
 <button onclick="importModel()">导入</button><div id="importmsg" class="muted"></div>
@@ -75,6 +86,7 @@
 <label>选择模型 <select id="chatmodel"></select></label>
 <label>上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384">16K</option><option value="32768">32K</option></select></label>
 <button onclick="startChat()">启动聊天服务</button><button class="sec" onclick="stopChat()">停止</button>
+<button class="sec" onclick="newChat()">+ 新对话</button><p class="muted">先在“运行”页启动一个模型再聊；画图、做视频不用启动聊天服务。</p>
 <div id="chatbox" class="chatbox"></div>
 <label>你说 <textarea id="chatin" rows="3"></textarea></label>
 <button onclick="sendChat()">发送</button></div>
@@ -83,6 +95,7 @@
 <p class="muted">安全边界：Agent 只能在你指定的工作文件夹里读写文件、跑命令，超出文件夹、含 ..、删除、格式化等一律拦截。不要把整个文档、桌面或系统盘交给它。Agent 要用聊天服务里的本地模型做计划，先在对话页启动服务；小模型做计划可能不稳定，大模型效果更好。</p>
 <label>工作文件夹（完整路径） <input id="afolder" placeholder="例如 C:\Work\agent-test"></label>
 <label>任务 <textarea id="atask" rows="3" placeholder="例如：在文件夹里新建 hello.txt，内容是 Hello Local AI，然后列出文件夹"></textarea></label>
+<div><button class="sec" onclick="fillTask('做一个番茄钟网页，打开 index.html 就能用')">做一个番茄钟网页</button> <button class="sec" onclick="fillTask('写个 Python 脚本，把这个文件夹里的图片批量压缩到 1080p')">批量压缩图片</button> <button class="sec" onclick="fillTask('读一下这个项目，写一份 README.md 说明怎么运行')">写 README</button> <button class="sec" onclick="fillTask('整理这个文件夹：按文件类型分到不同文件夹')">整理文件夹</button></div>
 <button onclick="runAgent()">开始 Agent</button><pre id="asteps"></pre></div>
 
 <div id="img" class="tab card"><h2>画图</h2>
@@ -109,6 +122,10 @@
 </select></label>
 <p class="muted">主题存在本机，下次打开 OpenLoc 还是你选的那个。黑色主题是纯黑背景、深灰卡片、青色按钮。</p>
 <p class="muted">数据文件夹：程序所在目录旁的 data/，里面分 engines（引擎）、models（模型）、outputs（生成的图片和视频）。</p>
+<h3>模型存放</h3><p class="muted">模型默认存在 data/models/。你也可以在运行页“导入本地已有模型”里把别处下好的 .gguf、.safetensors、.ckpt 导进来，程序会复制到这个文件夹，不会自动搬走你原来的文件。</p>
+<h3>界面语言</h3><p class="muted">当前界面为简体中文，跟随系统语言的切换还没有单独做，下一版再加。</p>
+<h3>本地 API 端口</h3><p class="muted">聊天服务用的是 llama-server，默认跑在 127.0.0.1:8080，只限本机访问，不对外网开放。</p>
+<h3>关于加速</h3><p class="muted">OpenLoc 不做付费加速通道，所有引擎和模型都直接从 GitHub / HuggingFace 免费下载，下载速度取决于你的网络。</p>
 </div>
 
 </main>
