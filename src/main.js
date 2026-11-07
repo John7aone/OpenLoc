@@ -139,24 +139,37 @@ function getPort() { try { return parseInt(localStorage.getItem('openloc-port') 
 window.tab = function(id, btn) {
   setActionNote("");
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("on"));
-  document.getElementById(id).classList.add("on");
-  document.querySelectorAll("nav button").forEach(b => b.classList.remove("on"));
-  if (btn) btn.classList.add("on");
+  const page = document.getElementById(id);
+  if (page) page.classList.add("on");
+  document.querySelectorAll("#nav button").forEach(b => {
+    b.classList.remove("on");
+    b.removeAttribute("aria-current");
+  });
+  const target = (btn && btn.closest && btn.closest("#nav")) ? btn : document.querySelector('#nav button[data-page="' + id + '"]');
+  if (target) { target.classList.add("on"); target.setAttribute("aria-current", "page"); }
+  const main = document.querySelector(".main");
+  if (main) main.scrollTop = 0;
   if (id === "cat") loadCatalog();
   if (id === "chat" || id === "img" || id === "vid" || id === "md") loadModels();
-  if (id === "md") updatePlan();
+  if (id === "md") { updatePlan(); loadEngineStatus(); }
   if (id === "settings") loadEngineStatus();
+  if (id === "img") refreshImgEmpty();
+  if (id === "vid") refreshVidEmpty();
 };
+function normalizeTheme(v) { return (v === "dark" || v === "black") ? "dark" : "light"; }
 window.toggleTheme = function() {
-  const cur = document.documentElement.getAttribute("data-theme") === "black" ? "black" : "light";
-  setTheme(cur === "black" ? "light" : "black");
+  const cur = normalizeTheme(document.documentElement.getAttribute("data-theme"));
+  setTheme(cur === "dark" ? "light" : "dark");
 };
 window.setTheme = function(v) {
-  document.documentElement.setAttribute("data-theme", v === "light" ? "" : v);
-  const label = v === "black" ? "切换浅色主题" : "切换黑色主题";
-  const a = document.getElementById("themeBtn"); if (a) a.textContent = label;
-  const b = document.getElementById("themeBtn2"); if (b) b.textContent = label;
-  try { localStorage.setItem("openloc-theme", v); } catch (e) {}
+  const theme = normalizeTheme(v);
+  document.documentElement.setAttribute("data-theme", theme);
+  const label = theme === "dark" ? "切换到浅色" : "切换到深色";
+  for (const id of ["themeBtn", "themeBtn2"]) {
+    const el = document.getElementById(id);
+    if (el) el.setAttribute("aria-label", label);
+  }
+  try { localStorage.setItem("openloc-theme", theme); } catch (e) {}
 };
 function paintLayer(known, gpu, ram, disk) {
   const bar = document.getElementById("layerbar");
@@ -167,14 +180,14 @@ function paintLayer(known, gpu, ram, disk) {
   const d = document.getElementById("layer-disk-t"); if (d) d.textContent = disk;
 }
 function markStep(done) {
-  const step = document.getElementById("step1");
-  const num = document.getElementById("step1-num");
-  const st = document.getElementById("step1-st");
-  const sub = document.getElementById("step1-sub");
+  const step = document.getElementById("step-hw");
+  const num = document.getElementById("step-hw-num");
+  const st = document.getElementById("step-hw-status");
+  const sub = document.getElementById("step-hw-sub");
   if (!step) return;
   step.classList.toggle("done", !!done);
   if (num) num.textContent = done ? "✓" : "1";
-  if (st) st.textContent = done ? "已完成" : (hasTauri() ? "未检测" : "网页预览未检测");
+  if (st) st.textContent = done ? "已检测" : (hasTauri() ? "未检测" : "网页预览未检测");
   if (sub) sub.textContent = done ? "已读到本机配置" : (hasTauri() ? "还没读到硬件" : "浏览器读不到显卡和内存");
 }
 window.loadHw = async function() {
@@ -342,9 +355,9 @@ window.loadInstalled = async function() {
     const list = await invoke("list_local_model_info");
     const h = await invoke("get_hardware");
     if (tabBtn) tabBtn.textContent = "已安装（" + list.length + "）";
-    const step3 = document.getElementById("step3");
-    const step3st = document.getElementById("step3-st");
-    if (list.length && step3) { step3.classList.add("done"); if (step3st) step3st.textContent = "已有模型"; }
+    const step3 = document.getElementById("step-model");
+    const step3sub = document.getElementById("step-model-sub");
+    if (list.length && step3) { step3.classList.add("done"); if (step3sub) step3sub.textContent = "本机已有模型"; }
     el.innerHTML = list.length ? list.map((m) => {
       const quant = (m.name.match(/Q\d+_[A-Z0-9_]+/i) || ["—"])[0];
       const fit = m.size_gb <= (h.gpu_vram_gb || 0) ? "流畅" : m.size_gb <= h.memory_total_gb ? "能跑" : "较慢";
@@ -433,26 +446,54 @@ window.dlCat = async function(repo, f) {
   alert("已开始下载 " + f);
 };
 window.dl = async function(kind, url, filename) {
-  const el = document.getElementById("dlmsg");
-  if (!hasTauri()) { if (el) el.textContent = "网页预览不会下载引擎。请在桌面版 OpenLoc 里下载，免费，没有加速通道。"; return; }
-  try { el.textContent = await invoke("download_file", { url, filename, kind }); loadEngineStatus(); }
-  catch (e) { el.textContent = "没有开始下载：" + e; }
+  const els = [document.getElementById("dlmsg"), document.getElementById("run-dlmsg")].filter(Boolean);
+  const say = (t) => els.forEach((el) => { el.textContent = t; });
+  if (!hasTauri()) { say("网页预览不会下载引擎。请在桌面版 OpenLoc 的运行页安装，免费，没有加速通道。"); return; }
+  try { say(await invoke("download_file", { url, filename, kind })); loadEngineStatus(); }
+  catch (e) { say("没有开始下载：" + e); }
 };
+window.dlLlama = function() { return dl("engine", document.getElementById("llamaurl").value, "llama.zip"); };
+window.dlSd = function() { return dl("engine", document.getElementById("sdurl").value, "sd.zip"); };
 window.loadEngineStatus = async function() {
   const el = document.getElementById("engine-info");
+  const sub = document.getElementById("step-engine-sub");
+  const step = document.getElementById("step-engine");
+  const runInfo = document.getElementById("run-engine-info");
   try {
     const s = await invoke("engine_status");
-    if (el) el.textContent = "聊天引擎：" + (s.llama ? "已安装（" + s.llama + "）" : "未安装") + "；画图引擎：" + (s.sd ? "已安装" : "未安装") + "。引擎不在安装包里，第一次用时点下载，免费。";
-    if (s.llama) {
-      const step = document.getElementById("step2");
-      const st = document.getElementById("step2-st");
-      if (step) step.classList.add("done");
-      if (st) st.textContent = "已安装";
-    }
+    if (el) el.textContent = "聊天引擎：" + (s.llama ? "已安装（" + s.llama + "）" : "未安装") + "；画图引擎：" + (s.sd ? "已安装" : "未安装") + "。安装和启动在运行页，免费，没有加速通道。";
+    if (step) step.classList.toggle("done", !!(s && s.llama));
+    if (sub) sub.textContent = s && s.llama ? "聊天引擎已安装，去运行页启动" : "还没安装，去运行页安装并启动";
+    if (runInfo) runInfo.textContent = (s && s.llama ? "聊天引擎已安装。" : "聊天引擎还没安装。") + (s && s.sd ? "画图引擎已安装。" : "画图引擎还没安装。") + "在这一页安装并启动。";
   } catch (e) {
-    if (el && !hasTauri()) el.textContent = "网页预览看不到本机有没有装好 llama.cpp 或画图引擎，也看不到安装路径。桌面版会显示路径。引擎不在安装包里，要在桌面版下载，免费。";
+    if (!hasTauri()) {
+      if (el) el.textContent = "网页预览看不到本机引擎。安装和启动在运行页，桌面版才会真的下载。";
+      if (sub) sub.textContent = "网页预览不能安装，去运行页看说明";
+      if (runInfo) runInfo.textContent = "网页预览不会安装或启动引擎。桌面版在这一页安装 llama.cpp 和画图引擎。";
+    }
   }
 };
+function isImageWeight(name) { return /\.(safetensors|ckpt)$/i.test(name || ""); }
+async function refreshMediaEmpty(which) {
+  const box = document.getElementById(which + "-empty");
+  const text = document.getElementById(which + "-empty-text");
+  if (!box || !text) return;
+  const noun = which === "img" ? "画图" : "视频";
+  box.hidden = false;
+  if (!hasTauri()) {
+    text.textContent = "网页预览看不到" + noun + "引擎和模型。缺引擎去运行页，缺模型去模型页。";
+    return;
+  }
+  let sd = null;
+  let infos = [];
+  try { const s = await invoke("engine_status"); sd = s && s.sd; } catch (e) {}
+  try { infos = await invoke("list_local_model_info"); } catch (e) { infos = []; }
+  if (!sd) { text.textContent = "还没装" + noun + "引擎。缺引擎去运行页。"; return; }
+  if (!infos.some((m) => isImageWeight(m.name))) { text.textContent = "还没下" + noun + "模型。缺模型去模型页。"; return; }
+  box.hidden = true;
+}
+function refreshImgEmpty() { return refreshMediaEmpty("img"); }
+function refreshVidEmpty() { return refreshMediaEmpty("vid"); }
 async function refreshChatModel() {
   const dot = document.getElementById("modelDot");
   if (!dot) return;
@@ -915,4 +956,5 @@ window.savePort = function() {
   });
   loadImgModels();
   loadHw(); loadModels(); loadEngineStatus();
+  refreshImgEmpty(); refreshVidEmpty();
 })();

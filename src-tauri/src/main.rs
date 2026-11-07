@@ -369,7 +369,7 @@ fn chat_ask_inner(message: &str, port: u16) -> Result<String, String> {
 fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32, port: Option<u16>) -> Result<String, String> {
     let port = port.unwrap_or(LLAMA_PORT);
     *state.chat_port.lock().unwrap() = port;
-    let bin = find_llama_server().ok_or("还没下载 llama.cpp 引擎，请先在“模型”页下载聊天引擎")?;
+    let bin = find_llama_server().ok_or("还没安装聊天引擎。请打开「运行」页安装后再启动。")?;
     let model_path = models_dir().join(&model);
     if !model_path.exists() {
         return Err(format!("模型文件不存在：{}", model));
@@ -481,7 +481,7 @@ fn engine_status() -> serde_json::Value {
 // ---------- 画图 / 视频 ----------
 #[tauri::command]
 fn generate_image(model: String, prompt: String, steps: u32, width: u32, height: u32) -> Result<String, String> {
-    let bin = find_sd_cli().ok_or("还没下载 stable-diffusion.cpp 引擎，请先在“模型”页下载画图引擎")?;
+    let bin = find_sd_cli().ok_or("还没安装画图引擎。请打开「运行」页安装后再试。")?;
     let model_path = models_dir().join(&model);
     if !model_path.exists() {
         return Err(format!("模型文件不存在：{}", model));
@@ -542,7 +542,7 @@ fn generate_motion_video(image: String, seconds: u32) -> Result<String, String> 
 
 #[tauri::command]
 fn generate_diffusion_video(model: String, prompt: String, frames: u32) -> Result<String, String> {
-    let bin = find_sd_cli().ok_or("还没下载 stable-diffusion.cpp 引擎")?;
+    let bin = find_sd_cli().ok_or("还没安装画图 / 视频引擎。请打开「运行」页安装后再试。")?;
     let model_path = models_dir().join(&model);
     if !model_path.exists() {
         return Err(format!("模型文件不存在：{}", model));

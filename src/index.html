@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,33 +9,31 @@
 <body>
 <div class="layout">
 <aside class="sidebar">
-<div class="logo"><span class="logo-mark">O</span><div><b>OpenLoc</b><div class="muted small">本地 AI 创作工坊</div></div></div>
+<div class="logo"><span class="logo-mark">OL</span><div><b>OpenLoc</b><div class="muted small">本地 AI 创作工坊</div></div></div>
 <nav id="nav">
-<button data-page="overview" class="on" onclick="tab('overview',this)"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>概览</button>
-<button data-page="cat" onclick="tab('cat',this)"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>模型</button>
-<button data-page="md" onclick="tab('md',this)"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7-11-7z"/></svg>运行</button>
-<button data-page="chat" onclick="tab('chat',this)"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5z"/></svg>对话</button>
-<button data-page="agent" onclick="tab('agent',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6"/></svg>Agent</button>
-<button data-page="img" onclick="tab('img',this)"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M5 17l5-5 4 4 3-3 2 2"/></svg>画图</button>
-<button data-page="vid" onclick="tab('vid',this)"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9l5 3-5 3V9z"/></svg>视频</button>
-<button data-page="settings" onclick="tab('settings',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>设置</button>
+<button type="button" data-page="overview" class="on" aria-current="page" onclick="tab('overview',this)"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>概览</button>
+<button type="button" data-page="cat" onclick="tab('cat',this)"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>模型</button>
+<button type="button" data-page="md" onclick="tab('md',this)"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7-11-7z"/></svg>运行</button>
+<button type="button" data-page="chat" onclick="tab('chat',this)"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5z"/></svg>对话</button>
+<button type="button" data-page="agent" onclick="tab('agent',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6"/></svg>Agent</button>
+<button type="button" data-page="img" onclick="tab('img',this)"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M5 17l5-5 4 4 3-3 2 2"/></svg>画图</button>
+<button type="button" data-page="vid" onclick="tab('vid',this)"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9l5 3-5 3V9z"/></svg>视频</button>
+<button type="button" data-page="settings" onclick="tab('settings',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>设置</button>
 </nav>
 <div class="sidebar-foot">
-<button id="themeBtn" onclick="toggleTheme()">切换黑色主题</button>
-<div class="muted small">点一下换浅色 / 黑色，选完会自动记住。</div>
-<button onclick="takeShot()">截屏保存</button><div id="shotmsg" class="muted small"></div>
+<button id="themeBtn" class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="切换到深色"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 0 0 11.5 11.5z"/></svg></button>
+<button type="button" onclick="takeShot()">截屏保存</button><div id="shotmsg" class="muted small"></div>
 </div>
 </aside>
 
 <main class="main">
 <div id="preview-banner" class="preview-banner">网页预览：可以看各页布局。硬件数字、下载和启动引擎不会在浏览器里真的执行。桌面版 OpenLoc 才会做这些事。</div>
 <div id="action-note" class="composer-note" hidden></div>
-<div class="topbar">
 <div class="steps">
-<div class="step" id="step1"><span class="num" id="step1-num">1</span><div><b>检测硬件</b><small id="step1-sub">读取本机显卡、内存和磁盘</small></div><span class="status" id="step1-st">未检测</span></div>
-<div class="step" id="step2" onclick="tab('settings', document.querySelector('nav [data-page=settings]'))"><span class="num">2</span><div><b>安装推理引擎</b><small>llama.cpp · 画图引擎</small></div><span class="status" id="step2-st">去设置</span></div>
-<div class="step" id="step3" onclick="tab('cat', document.querySelector('nav [data-page=cat]'))"><span class="num">3</span><div><b>下载一个模型</b><small>从下面的推荐里选一个</small></div><span class="status" id="step3-st">去下载</span></div>
-</div>
+<div class="step" id="step-hw"><span class="num" id="step-hw-num">1</span><div class="step-copy"><b>看本机硬件</b><small id="step-hw-sub">正在检测…</small></div><span class="status" id="step-hw-status">检测中</span></div>
+<div class="step" id="step-engine"><span class="num">2</span><div class="step-copy"><b>装 / 启引擎</b><small id="step-engine-sub">安装和启动在运行页</small></div><button type="button" class="sec" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行</button></div>
+<div class="step" id="step-model"><span class="num">3</span><div class="step-copy"><b>下载模型</b><small id="step-model-sub">到模型页下载 GGUF</small></div><button type="button" class="sec" onclick="tab('cat', document.querySelector('#nav [data-page=cat]'))">去模型</button></div>
+<div class="step step-use" id="step-use"><span class="num">4</span><div class="step-copy"><b>开始用</b><small>对话、画图或视频</small></div><div class="step-actions"><button type="button" class="sec" onclick="tab('chat', document.querySelector('#nav [data-page=chat]'))">去对话</button><button type="button" class="sec" onclick="tab('img', document.querySelector('#nav [data-page=img]'))">去画图</button><button type="button" class="sec" onclick="tab('vid', document.querySelector('#nav [data-page=vid]'))">去视频</button></div></div>
 </div>
 
 <div id="overview" class="tab on">
@@ -63,12 +61,12 @@
 <div class="barlabel"><span>显存</span><span id="vram-text">未检测</span></div><div class="bar"><div id="vram-bar" class="fill teal" style="width:0"></div></div>
 <div class="barlabel"><span>内存</span><span id="mem-text">未检测</span></div><div class="bar"><div id="mem-bar" class="fill indigo" style="width:0"></div></div>
 <div class="barlabel"><span>硬盘</span><span id="disk-text">未检测</span></div><div class="bar"><div id="disk-bar" class="fill slate" style="width:0"></div></div>
-<div class="row" style="margin-top:12px"><button class="sec" type="button" onclick="loadHw()">重新检测硬件</button><button class="sec" type="button" onclick="tab('settings', document.querySelector('nav [data-page=settings]'))">模型目录</button></div>
+<div class="row" style="margin-top:12px"><button class="sec" type="button" onclick="loadHw()">重新检测硬件</button><button class="sec" type="button" onclick="tab('settings', document.querySelector('#nav [data-page=settings]'))">模型目录</button></div>
 <div class="muted small" id="gpu-status">显卡状态：未检测</div>
 </div>
 </div>
 </div>
-<div class="sec-head"><h2>为这台电脑推荐</h2><button class="sec" type="button" onclick="tab('cat', document.querySelector('nav [data-page=cat]'))">全部模型</button></div>
+<div class="sec-head"><h2>为这台电脑推荐</h2><button class="sec" type="button" onclick="tab('cat', document.querySelector('#nav [data-page=cat]'))">全部模型</button></div>
 <div id="recmodels"><p class="muted">正在准备推荐目录…</p></div>
 </div>
 
@@ -97,7 +95,7 @@
 <div class="row"><button class="sec" type="button" onclick="document.getElementById('importfile').click()">选择文件</button><button type="button" onclick="importModel()">按路径导入</button></div>
 <label>模型完整路径 <input id="importpath" placeholder="例如 C:\Models\qwen.gguf"></label>
 <div id="importmsg" class="muted"></div>
-<input id="importfile" type="file" accept=".gguf,.safetensors,.ckpt" hidden>
+<input id="importfile" type="file" accept=".gguf,.safetensors,.ckpt">
 </div>
 </div>
 <div id="cat-img" style="display:none">
@@ -107,19 +105,29 @@
 <div id="imgmodels"></div>
 </div>
 <div id="cat-search" style="display:none">
-<div class="searchrow"><input id="hfq" placeholder="搜索 HuggingFace 上的 GGUF 模型…" style="flex:1;margin:0"><button type="button" onclick="searchHf()">搜索</button></div>
+<div class="searchrow"><input id="hfq" placeholder="搜索 HuggingFace 上的 GGUF 模型…"><button type="button" onclick="searchHf()">搜索</button></div>
 <p class="search-empty" id="hfempty">输入模型名字搜索 HuggingFace 上的 GGUF 模型，例如 qwen3.8、gemma-4、glm</p>
 <div id="hfres"></div>
 </div>
 </div>
 
 <div id="md" class="tab">
+<div class="card" id="engine-card">
+<h3>装 / 启引擎</h3>
+<p class="muted" id="run-engine-info">安装和启动都在这一页。网页预览不会下载或启动引擎。</p>
+<div class="row">
+<button type="button" onclick="dlLlama()">安装聊天引擎</button>
+<button type="button" class="sec" onclick="dlSd()">安装画图 / 视频引擎</button>
+</div>
+<p class="muted small">聊天用 llama.cpp，画图和扩散视频用 stable-diffusion.cpp。两份都是 GitHub 上的公开项目，许可证是 MIT。网页预览点安装只会说明做不到。</p>
+<div id="run-dlmsg" class="muted"></div>
+</div>
 <div class="run-top">
 <div>
 <div class="muted small" id="run-state">准备运行</div>
 <select id="runmodel" aria-label="要运行的模型"><option value="">还没有选择已安装模型</option></select>
 </div>
-<button class="sec" type="button" onclick="tab('cat', document.querySelector('nav [data-page=cat]'))">管理模型</button>
+<button class="sec" type="button" onclick="tab('cat', document.querySelector('#nav [data-page=cat]'))">管理模型</button>
 </div>
 <div id="startcard" class="card" style="display:none"><b id="start-title">正在启动…</b><div class="row" style="justify-content:space-between"><span class="muted" id="start-sub"></span><b id="start-pct"></b></div><div class="bar"><div id="start-bar" class="fill teal"></div></div><div class="muted small" id="start-log"></div></div>
 <div class="run-grid">
@@ -152,7 +160,7 @@
 </div>
 <button id="startBtn" type="button" onclick="startRunModel()">启动模型</button>
 <button class="sec" id="stopBtn" type="button" onclick="stopRunModel()" style="display:none">停止模型</button>
-<button class="sec" id="chatBtn" type="button" onclick="tab('chat', document.querySelector('nav [data-page=chat]'))" style="display:none">开始对话</button>
+<button class="sec" id="chatBtn" type="button" onclick="tab('chat', document.querySelector('#nav [data-page=chat]'))" style="display:none">开始对话</button>
 <div id="runmsg" class="muted"></div>
 </div>
 </div>
@@ -163,7 +171,7 @@
 
 <div id="chat" class="tab card">
 <div class="chatwrap">
-<div class="chatlist"><button onclick="newChat()">+ 新对话</button><div class="mcard" id="chat-history"><b>你好</b><div class="muted small">当前对话</div></div></div>
+<div class="chatlist"><button type="button" onclick="newChat()">+ 新对话</button><div class="mcard" id="chat-history"><b>你好</b><div class="muted small">当前对话</div></div></div>
 <div class="chatmain">
 <div class="chat-head">
 <div class="model-pill">
@@ -180,23 +188,25 @@
 </div>
 <div id="chatbox" class="chatbox">
 <div id="chat-empty" class="chat-empty">
-<b>本地模型还没有启动</b>
-<p>先在“运行”页启动一个模型，再在这里发消息。</p>
+<b>有什么可以帮你？</b>
+<p>模型完全在你电脑上运行，对话内容不会上传。</p>
+<p>本地模型还没有启动。先在「运行」页启动一个模型，再在这里发消息。</p>
+<button type="button" class="sec" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页启动</button>
 </div>
 </div>
 <div class="composer">
 <div id="chat-attach" class="attach-strip" hidden></div>
 <textarea id="chatin" rows="3" placeholder="问点什么，或者说「画一只…」（Enter 发送，Shift+Enter 换行）"></textarea>
-<div class="composer-hint">先在“运行”页启动一个模型；画图、做视频不用启动聊天服务。</div>
+<div class="composer-hint">先在「运行」页启动一个模型；画图、做视频不用启动聊天服务。</div>
 <div class="composer-bar">
 <div class="composer-tools">
 <button type="button" class="toolbtn" onclick="pickAttach()" title="添加附件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5l6.2-6.2a3 3 0 014.2 4.2l-7.4 7.4a4.5 4.5 0 01-6.4-6.4l6.8-6.8"/></svg>附件</button>
 <button type="button" class="toolbtn" id="shotBtn" onclick="captureForChat()" title="截图并放入当前对话。网页预览不可截屏，桌面版可用。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
-<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('nav [data-page=agent]'))" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
-<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('nav [data-page=agent]'))" title="操作电脑"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>操作电脑</button>
-<button type="button" class="toolbtn" onclick="tab('img', document.querySelector('nav [data-page=img]'))" title="画图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l5-4 3 3 3-2 3 3"/></svg>画图</button>
-<button type="button" class="toolbtn" onclick="tab('vid', document.querySelector('nav [data-page=vid]'))" title="视频"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9.2l5 2.8-5 2.8z"/></svg>视频</button>
-<button type="button" class="toolbtn" onclick="tab('settings', document.querySelector('nav [data-page=settings]'))" title="对话设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h16"/><circle cx="16" cy="12" r="2"/></svg>对话设置</button>
+<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
+<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="操作电脑"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>操作电脑</button>
+<button type="button" class="toolbtn" onclick="tab('img', document.querySelector('#nav [data-page=img]'))" title="画图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l5-4 3 3 3-2 3 3"/></svg>画图</button>
+<button type="button" class="toolbtn" onclick="tab('vid', document.querySelector('#nav [data-page=vid]'))" title="视频"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9.2l5 2.8-5 2.8z"/></svg>视频</button>
+<button type="button" class="toolbtn" onclick="tab('settings', document.querySelector('#nav [data-page=settings]'))" title="对话设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h16"/><circle cx="16" cy="12" r="2"/></svg>对话设置</button>
 </div>
 <button type="button" class="sendbtn" onclick="sendChat()" title="发送" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></svg></button>
 </div>
@@ -205,7 +215,7 @@
 <label class="ctx-line">上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384" selected>16K</option><option value="32768">32K</option></select></label>
 </div>
 </div>
-<input id="chatfile" type="file" multiple hidden accept="image/*,.txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.gif">
+<input id="chatfile" type="file" multiple accept="image/*,.txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.gif">
 </div>
 </div>
 </div>
@@ -214,7 +224,7 @@
 <div class="agent-wrap">
 <div class="agent-side">
 <button type="button" onclick="newAgentTask()">+ 新任务</button>
-<div id="agent-tasks"><div class="muted small" id="agent-empty-list">还没有任务</div></div>
+<div id="agent-tasks"><div class="muted small">还没有任务</div></div>
 </div>
 <div class="agent-main">
 <div class="chat-head">
@@ -259,26 +269,34 @@
 </div>
 
 <div id="img" class="tab card"><h2>画图</h2>
-<p class="muted">需要先下载画图引擎和一个 SD 模型（.safetensors 也可以导入）。没有 GPU 会很慢，这是实话。</p>
+<div id="img-empty" class="empty">
+<p id="img-empty-text">还没装画图引擎或画图模型。缺引擎去运行页，缺模型去模型页。</p>
+<div class="row"><button type="button" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页装引擎</button><button type="button" class="sec" onclick="tab('cat', document.querySelector('#nav [data-page=cat]')); catTab('img', document.getElementById('sub-img'))">去模型页下载</button></div>
+</div>
+<p class="muted">没有 GPU 会很慢。出图用的是本机画图引擎。</p>
 <label>模型 <select id="imgmodel"></select></label>
 <label>提示词 <textarea id="imgprompt" rows="3" placeholder="例如：a cat sitting by the window, soft light"></textarea></label>
 <label>步数 <input id="imgsteps" type="number" value="20"></label>
-<button onclick="genImg()">生成图片</button><div id="imgmsg" class="muted"></div></div>
+<button type="button" onclick="genImg()">生成图片</button><div id="imgmsg" class="muted"></div></div>
 
 <div id="vid" class="tab card"><h2>视频</h2>
+<div id="vid-empty" class="empty">
+<p id="vid-empty-text">还没装视频引擎或视频模型。缺引擎去运行页，缺模型去模型页。</p>
+<div class="row"><button type="button" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页装引擎</button><button type="button" class="sec" onclick="tab('cat', document.querySelector('#nav [data-page=cat]')); catTab('img', document.getElementById('sub-img'))">去模型页下载</button></div>
+</div>
 <p><b>方式一：动效视频（ffmpeg）</b>——把一张图做成推近动效，这是动效，不是扩散生成，CPU 就能跑。</p>
 <label>图片完整路径 <input id="vidimg" placeholder="例如 C:\...\outputs\img_xxx.png"></label>
-<button onclick="genMotion()">生成动效视频</button>
+<button type="button" onclick="genMotion()">生成动效视频</button>
 <p><b>方式二：扩散视频（Wan）</b>——调用 sd-cli 的 vid_gen，需要 Wan 视频模型和足够显存，没有会直接报错，不会给你假视频。</p>
 <label>视频模型 <select id="vidmodel"></select></label>
 <label>提示词 <textarea id="vidprompt" rows="2"></textarea></label>
-<button onclick="genVid()">生成扩散视频</button><div id="vidmsg" class="muted"></div></div>
+<button type="button" onclick="genVid()">生成扩散视频</button><div id="vidmsg" class="muted"></div></div>
 
 <div id="settings" class="tab">
 <h2>设置</h2>
 <div class="setcard"><h3>模型存放</h3>
 <label>模型目录 <input id="modeldir" value="data/models" readonly></label>
-<p class="muted">默认在程序旁边的 data/models，放在空间大的盘上会更合适。改目录还没接上，已下载的模型也不会自动搬家。选择按钮在桌面版会打开这个文件夹，网页预览打不开系统窗口。</p>
+<p class="muted">默认在程序旁边的 data/models。改目录还没接上，已下载的模型也不会自动搬家。选择按钮在桌面版会打开这个文件夹，网页预览打不开系统窗口。</p>
 <div class="row"><button class="sec" type="button" onclick="chooseModelDir()">选择…</button><button class="sec" type="button" onclick="openModelsFolder()">打开模型文件夹</button><button class="sec" type="button" onclick="openDataFolder()">打开数据目录</button></div>
 </div>
 <div class="setcard"><h3>界面语言</h3>
@@ -287,10 +305,11 @@
 <div class="setcard"><h3>显卡</h3>
 <p id="gpu-info">未检测。点重新检测；网页预览读不到你的显卡。</p>
 <div class="row"><button class="sec" type="button" onclick="loadHw()">重新检测</button></div>
-<details><summary>检测不到显卡，或者显存不对？</summary><p class="muted">目前只认自动检测到的 NVIDIA 显卡，没有手动指定。检测不到时，运行页走 CPU / 内存，不会假装有一块显卡。</p></details>
+<details><summary>检测不到显卡，或者显存不对？</summary><p class="muted">目前只认自动检测到的 NVIDIA 显卡。检测不到时，运行页走 CPU / 内存，不会假装有一块显卡。</p></details>
 </div>
 <div class="setcard"><h3>推理引擎</h3>
-<p id="engine-info">引擎不在安装包里。桌面版可以下载 llama.cpp（聊天）和 stable-diffusion.cpp（画图/视频），都是公开项目，免费。网页预览不会下载。</p>
+<p id="engine-info">安装和启动在运行页。聊天引擎来自 llama.cpp，画图和视频引擎来自 stable-diffusion.cpp，源码在 GitHub，许可证是 MIT。</p>
+<div class="row"><button class="sec" type="button" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页安装并启动</button></div>
 <label>聊天引擎下载地址 <input id="llamaurl" value="https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip"></label>
 <button type="button" onclick="dl('engine',document.getElementById('llamaurl').value,'llama.zip')">下载聊天引擎</button>
 <label>画图引擎下载地址 <input id="sdurl" value="https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1043/sd-master-1043-bin-win-cuda12-x64.zip"></label>
@@ -303,9 +322,9 @@
 <p class="muted" id="portmsg">聊天服务默认跑在 127.0.0.1:8080，只限本机。被占用时请改一个空闲端口，下次启动生效。不会自动对外网开放。</p>
 </div>
 <div class="setcard"><h3>关于 OpenLoc</h3>
-<p>OpenLoc 是跑在你电脑上的本地创作工坊。模型、对话和 Agent 的文件都留在本机。</p>
-<div class="row"><button class="sec" type="button" onclick="checkUpdate()">检查更新</button><button class="sec" type="button" id="themeBtn2" onclick="toggleTheme()">切换黑色主题</button></div>
-<p class="muted" id="aboutmsg">这一版不连接更新服务器。要看有没有新版本，请到项目仓库。</p>
+<p>OpenLoc 是跑在你电脑上的本地创作工坊。模型、对话和 Agent 的文件都留在本机。聊天引擎是 llama.cpp，画图和扩散视频是 stable-diffusion.cpp，许可证都是 MIT。模型权重在 Hugging Face，不随安装包附带。</p>
+<div class="row"><button class="sec" type="button" onclick="checkUpdate()">检查更新</button><button id="themeBtn2" class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="切换到深色"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 0 0 11.5 11.5z"/></svg></button></div>
+<p class="muted" id="aboutmsg">这一版不连接更新服务器。要看有没有新版本，请到项目仓库。浅色是灰白底，深色是海军蓝底，主色是蓝。</p>
 </div>
 <div class="setcard"><h3>授权控制</h3>
 <p class="muted">OpenLoc 只能控制下面这些它自己的后台程序，不碰你电脑上的其他程序。哪项没勾，就不会做那件事。</p>
