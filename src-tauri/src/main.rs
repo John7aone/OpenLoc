@@ -7,15 +7,20 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod chat_proto;
+mod engine_io;
+
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use sysinfo::{Disks, System};
+use std::time::{Duration, Instant};
+use sysinfo::{Disks, Pid, System};
 
 const LLAMA_PORT: u16 = 8080;
 
@@ -24,7 +29,9 @@ struct AppState {
     chat_running: Mutex<bool>,
     chat_model: Mutex<String>,
     chat_port: Mutex<u16>,
+    chat_pid: Mutex<Option<u32>>,
     tray_enabled: Mutex<bool>,
+    chat_gen: AtomicU64,
 }
 
 // ---------- 目录 ----------
@@ -230,7 +237,7 @@ fn download_file(url: String, filename: String, kind: String) -> Result<String, 
     }
     let mut resp = req.send().map_err(|e| e.to_string())?;
     if resp.status().as_u16() == 416 {
-        return Ok(format!("已完成：{}", filename));
+        return finalize_download(&dest, &filename, &kind);
     }
     if !resp.status().is_success() {
         return Err(format!("下载失败：HTTP {}", resp.status()));
@@ -257,7 +264,7 @@ fn download_file(url: String, filename: String, kind: String) -> Result<String, 
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o755));
     }
-    Ok(format!("已下载：{}", filename))
+    finalize_download(&dest, &filename, &kind)
 }
 
 #[tauri::command]
@@ -291,143 +298,373 @@ fn import_model(path: String) -> Result<String, String> {
 
 // ---------- 引擎路径 ----------
 fn find_llama_server() -> Option<PathBuf> {
-    let dir = engines_dir();
-    for entry in fs::read_dir(&dir).ok()?.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            for f in ["llama-server", "llama-server.exe"] {
-                let cand = p.join(f);
-                if cand.exists() {
-                    return Some(cand);
-                }
-            }
-        }
-    }
-    let cand = dir.join("llama-server");
-    if cand.exists() {
-        return Some(cand);
-    }
-    let cand = dir.join("llama-server.exe");
-    if cand.exists() {
-        return Some(cand);
-    }
-    None
+    engine_io::find_named_binary(&engines_dir(), &["llama-server", "llama-server.exe"])
 }
 
 fn find_sd_cli() -> Option<PathBuf> {
-    let dir = engines_dir();
-    for entry in fs::read_dir(&dir).ok()?.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            for f in ["sd-cli", "sd-cli.exe", "sd-server", "sd-server.exe"] {
-                let cand = p.join(f);
-                if cand.exists() {
-                    return Some(cand);
-                }
-            }
+    engine_io::find_named_binary(&engines_dir(), &["sd-cli", "sd-cli.exe", "sd-server", "sd-server.exe"])
+}
+
+fn finalize_download(dest: &Path, filename: &str, kind: &str) -> Result<String, String> {
+    let lower = filename.to_lowercase();
+    if kind == "engine" && lower.ends_with(".zip") {
+        let sub = if lower.contains("sd") && !lower.contains("llama") {
+            "sd"
+        } else {
+            "llama"
+        };
+        let dir = engines_dir().join(sub);
+        engine_io::extract_zip(dest, &dir)?;
+        if sub == "llama" {
+            return match find_llama_server() {
+                Some(path) => Ok(format!("聊天引擎已安装，找到 {}", path.display())),
+                None => Err(chat_proto::err_zip_no_llama()),
+            };
         }
+        return match find_sd_cli() {
+            Some(path) => Ok(format!("画图引擎已安装，找到 {}", path.display())),
+            None => Err(
+                "压缩包已解压，但里面没有 sd-cli 或 sd-server。下一步：确认地址是 stable-diffusion.cpp 的 Windows 可执行包后重新安装。"
+                    .to_string(),
+            ),
+        };
     }
-    None
+    Ok(format!("已下载：{filename}"))
 }
 
 // ---------- 聊天 ----------
-fn chat_ask_inner(message: &str, port: u16) -> Result<String, String> {
-    let body = serde_json::json!({
-        "model": "local",
-        "messages": [{"role": "user", "content": message}],
-        "temperature": 0.7,
-    });
-    let mut last_err = String::new();
-    for _ in 0..4 {
-        match reqwest::blocking::Client::new()
-            .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(300))
-            .send()
-        {
-            Ok(resp) => {
-                if resp.status().as_u16() == 503 {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    continue;
-                }
-                let v: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-                return Ok(v["choices"][0]["message"]["content"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string());
-            }
-            Err(e) => {
-                last_err = e.to_string();
-                std::thread::sleep(std::time::Duration::from_secs(2));
+fn model_file_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('\0')
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && Path::new(name).file_name().and_then(|s| s.to_str()) == Some(name)
+}
+
+fn pid_alive(pid: u32) -> bool {
+    if Path::new(&format!("/proc/{pid}")).exists() {
+        return true;
+    }
+    let sys = System::new_all();
+    sys.process(Pid::from_u32(pid)).is_some()
+}
+
+fn llama_log_path() -> PathBuf {
+    base_dir().join("logs").join("llama-server.log")
+}
+
+fn engine_cmd_hit(proc: &sysinfo::Process, engines: &Path) -> bool {
+    let marker = engines.to_string_lossy();
+    if marker.is_empty() {
+        return false;
+    }
+    if proc.cmd().iter().any(|arg| arg.to_string_lossy().contains(marker.as_ref())) {
+        return true;
+    }
+    proc.exe().map(|path| path.starts_with(engines)).unwrap_or(false)
+}
+
+fn stop_our_llama(our_pid: Option<u32>) -> usize {
+    let engines = engines_dir();
+    let sys = System::new_all();
+    let mut n = 0;
+    for proc in sys.processes().values() {
+        let name = proc.name().to_string_lossy().to_string();
+        let pid = proc.pid().as_u32();
+        let ours = Some(pid) == our_pid
+            || engine_io::should_stop_process(&name, pid, our_pid, engine_cmd_hit(proc, &engines));
+        if ours && proc.kill() {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn chat_turns_from(message: String, messages: Option<Vec<ChatIn>>) -> Result<Vec<chat_proto::ChatTurn>, String> {
+    if let Some(list) = messages {
+        if !list.is_empty() {
+            return chat_proto::normalize_messages(list.into_iter().map(|m| (m.role, m.content)).collect());
+        }
+    }
+    chat_proto::normalize_messages(vec![("user".to_string(), message)])
+}
+
+fn require_running(state: &AppState) -> Result<u16, String> {
+    let port = *state.chat_port.lock().unwrap();
+    let running = *state.chat_running.lock().unwrap();
+    if !running || port == 0 {
+        return Err(chat_proto::err_not_running());
+    }
+    match chat_proto::probe_health_blocking(port, Duration::from_millis(1500)) {
+        Ok(()) => Ok(port),
+        Err(err) => {
+            *state.chat_running.lock().unwrap() = false;
+            if err.contains("下一步") {
+                Err(err)
+            } else {
+                Err(format!(
+                    "聊天服务健康检查未通过（127.0.0.1:{port}）：{err}。下一步：回到「运行」页停止并重新启动，确认状态变成运行中后再发。本次没有编造回复。"
+                ))
             }
         }
     }
-    Err(format!("聊天服务未响应：{}", last_err))
+}
+
+fn chat_ask_inner(message: &str, port: u16) -> Result<String, String> {
+    if port == 0 {
+        return Err(chat_proto::err_not_running());
+    }
+    let turns = chat_proto::normalize_messages(vec![("user".to_string(), message.to_string())])?;
+    chat_proto::complete_chat(port, &turns, false)
+}
+
+#[derive(Deserialize)]
+struct ChatIn {
+    role: String,
+    content: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ChatStreamEvent {
+    id: u64,
+    kind: String,
+    text: String,
+}
+
+fn emit_chat(app: &tauri::AppHandle, id: u64, kind: &str, text: impl Into<String>) {
+    let _ = app.emit(
+        "openloc-chat",
+        ChatStreamEvent {
+            id,
+            kind: kind.to_string(),
+            text: text.into(),
+        },
+    );
 }
 
 #[tauri::command]
 fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32, port: Option<u16>) -> Result<String, String> {
     let port = port.unwrap_or(LLAMA_PORT);
-    *state.chat_port.lock().unwrap() = port;
-    let bin = find_llama_server().ok_or("还没安装聊天引擎。请打开「运行」页安装后再启动。")?;
-    let model_path = models_dir().join(&model);
-    if !model_path.exists() {
-        return Err(format!("模型文件不存在：{}", model));
+    if port == 0 {
+        return Err("端口无效。下一步：在设置里填写 1 到 65535 之间的空闲端口并保存。".to_string());
     }
-    // 先停掉旧的 llama-server（按进程名查找，避免跨平台存 Child 句柄的麻烦）。
-    let _ = stop_chat(state.clone());
+    let ctx = if ctx == 0 { 4096 } else { ctx };
+    if !model_file_name_ok(&model) {
+        return Err(chat_proto::err_model_name());
+    }
+    let bin = find_llama_server().ok_or_else(chat_proto::err_engine_missing)?;
+    let model_path = models_dir().join(&model);
+    if !model_path.is_file() {
+        return Err(chat_proto::err_model_missing(&model));
+    }
+    let old_pid = state.chat_pid.lock().unwrap().take();
+    stop_our_llama(old_pid);
+    *state.chat_running.lock().unwrap() = false;
+    let ready_at = Instant::now() + Duration::from_secs(5);
+    while !engine_io::port_bindable(port) {
+        if Instant::now() > ready_at {
+            *state.chat_port.lock().unwrap() = port;
+            return Err(chat_proto::err_port_busy(port));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let log_path = llama_log_path();
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("无法写启动日志：{e}"))?;
+    }
+    let log_file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(|e| format!("无法写启动日志：{e}"))?;
+    let err_file = log_file.try_clone().map_err(|e| format!("无法写启动日志：{e}"))?;
     let mut cmd = Command::new(&bin);
-    cmd.arg("-m")
-        .arg(&model_path)
-        .arg("--host")
-        .arg("127.0.0.1")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("-c")
-        .arg(ctx.to_string());
+    cmd.args(chat_proto::launch_args(&model_path, port, ctx))
+        .current_dir(bin.parent().unwrap_or(Path::new(".")))
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(err_file));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    cmd.spawn().map_err(|e| e.to_string())?;
-    // 端口通不等于模型加载完：等 /health 返回 ok，最多 60 秒。
-    for _ in 0..60 {
-        if let Ok(resp) = reqwest::blocking::get(format!("http://127.0.0.1:{}/health", port)) {
-            if let Ok(v) = resp.json::<serde_json::Value>() {
-                if v.get("status").and_then(|s| s.as_str()) == Some("ok") {
-                    break;
-                }
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
-    *state.chat_running.lock().unwrap() = true;
+    let mut child = cmd.spawn().map_err(|e| chat_proto::err_spawn(&e.to_string()))?;
+    let pid = child.id();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    *state.chat_pid.lock().unwrap() = Some(pid);
+    *state.chat_port.lock().unwrap() = port;
     *state.chat_model.lock().unwrap() = model.clone();
-    Ok(format!("聊天服务已启动：{}（仅本机可访问）", model))
+    *state.chat_running.lock().unwrap() = false;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        if !pid_alive(pid) {
+            *state.chat_pid.lock().unwrap() = None;
+            *state.chat_running.lock().unwrap() = false;
+            return Err(chat_proto::err_process_exited(&engine_io::tail_text(&log_path, 400)));
+        }
+        if chat_proto::probe_health_blocking(port, Duration::from_millis(800)).is_ok()
+            && chat_proto::ready_to_mark_running(true, true)
+        {
+            *state.chat_running.lock().unwrap() = true;
+            return Ok(format!(
+                "聊天服务已启动：{model}（仅 127.0.0.1:{port}，健康检查已通过）"
+            ));
+        }
+        if Instant::now() > deadline {
+            stop_our_llama(Some(pid));
+            *state.chat_pid.lock().unwrap() = None;
+            *state.chat_running.lock().unwrap() = false;
+            return Err(chat_proto::err_health_timeout(
+                port,
+                &engine_io::tail_text(&log_path, 400),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 #[tauri::command]
 fn stop_chat(state: tauri::State<AppState>) -> Result<String, String> {
-    let sys = System::new_all();
-    for proc in sys.processes().values() {
-        let name = proc.name().to_string_lossy().to_lowercase();
-        if name.contains("llama-server") {
-            let _ = proc.kill();
-        }
-    }
+    state.chat_gen.fetch_add(1, Ordering::SeqCst);
+    let pid = state.chat_pid.lock().unwrap().take();
+    let n = stop_our_llama(pid);
     *state.chat_running.lock().unwrap() = false;
-    Ok("聊天服务已停止".to_string())
+    if n == 0 {
+        Ok("聊天服务已停止（没有发现这次启动的 llama-server）".to_string())
+    } else {
+        Ok(format!("聊天服务已停止（{n} 个进程）"))
+    }
 }
 
 #[tauri::command]
-fn chat_ask(state: tauri::State<AppState>, message: String) -> Result<String, String> {
-    let port = *state.chat_port.lock().unwrap();
-    chat_ask_inner(&message, if port == 0 { LLAMA_PORT } else { port })
+fn chat_ask(
+    state: tauri::State<AppState>,
+    message: String,
+    messages: Option<Vec<ChatIn>>,
+    think: Option<bool>,
+) -> Result<String, String> {
+    let port = require_running(&state)?;
+    let turns = chat_turns_from(message, messages)?;
+    chat_proto::complete_chat(port, &turns, think.unwrap_or(false))
 }
+
+#[tauri::command]
+async fn chat_stream(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    messages: Vec<ChatIn>,
+    think: Option<bool>,
+    stream_id: u64,
+) -> Result<(), String> {
+    let port = *state.chat_port.lock().unwrap();
+    let running = *state.chat_running.lock().unwrap();
+    if !running || port == 0 {
+        return Err(chat_proto::err_not_running());
+    }
+    let probed = tauri::async_runtime::spawn_blocking(move || {
+        chat_proto::probe_health_blocking(port, Duration::from_millis(1500))
+    })
+    .await
+    .map_err(|err| chat_proto::err_request(&format!("健康检查任务失败：{err}")))?;
+    if let Err(err) = probed {
+        *state.chat_running.lock().unwrap() = false;
+        return Err(if err.contains("下一步") {
+            err
+        } else {
+            format!("聊天服务健康检查未通过（127.0.0.1:{port}）：{err}。下一步：回到「运行」页停止并重新启动，确认状态变成运行中后再发。本次没有编造回复。")
+        });
+    }
+    let turns = chat_turns_from(String::new(), Some(messages))?;
+    let gen = state.chat_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let think = think.unwrap_or(false);
+    let app_task = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let app_stop = app_task.clone();
+        let app_note = app_task.clone();
+        let app_piece = app_task.clone();
+        let outcome = chat_proto::open_and_read_stream(
+            port,
+            &turns,
+            think,
+            || app_stop.state::<AppState>().chat_gen.load(Ordering::SeqCst) != gen,
+            |note| emit_chat(&app_note, stream_id, "status", note),
+            |piece| match piece {
+                chat_proto::SsePiece::Delta(text) => emit_chat(&app_piece, stream_id, "delta", text),
+                chat_proto::SsePiece::Reasoning(text) => emit_chat(&app_piece, stream_id, "reasoning", text),
+                chat_proto::SsePiece::Done => {}
+            },
+        )
+        .await;
+        match outcome {
+            Ok(result) => {
+                let cancelled = result.cancelled
+                    || app_task.state::<AppState>().chat_gen.load(Ordering::SeqCst) != gen;
+                if cancelled {
+                    emit_chat(
+                        &app_task,
+                        stream_id,
+                        "cancelled",
+                        "已停止生成。已收到的内容保留，没有继续向本机服务要后续文字。",
+                    );
+                } else {
+                    emit_chat(&app_task, stream_id, "done", "");
+                }
+            }
+            Err(err) => emit_chat(&app_task, stream_id, "error", err),
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_chat(state: tauri::State<AppState>) -> String {
+    state.chat_gen.fetch_add(1, Ordering::SeqCst);
+    "已停止生成。已收到的内容保留，没有继续向本机服务要后续文字。".to_string()
+}
+
 #[tauri::command]
 fn get_chat_status(state: tauri::State<AppState>) -> serde_json::Value {
-    serde_json::json!({"running": *state.chat_running.lock().unwrap(), "model": state.chat_model.lock().unwrap().clone(), "port": *state.chat_port.lock().unwrap()})
+    let port = *state.chat_port.lock().unwrap();
+    let model = state.chat_model.lock().unwrap().clone();
+    let pid = *state.chat_pid.lock().unwrap();
+    let flagged = *state.chat_running.lock().unwrap();
+    let host = chat_proto::LOOPBACK_HOST;
+    if !flagged || port == 0 || pid.is_none() {
+        let detail = if model.is_empty() {
+            "未启动".to_string()
+        } else {
+            format!("未运行。上次选择的模型：{model}。下一步：打开「运行」页重新启动。")
+        };
+        return serde_json::json!({
+            "running": false,
+            "model": model,
+            "port": port,
+            "host": host,
+            "detail": detail,
+        });
+    }
+    let alive = pid_alive(pid.unwrap_or(0));
+    let health_ok = alive && chat_proto::probe_health_blocking(port, Duration::from_millis(1200)).is_ok();
+    let running = chat_proto::ready_to_mark_running(alive, health_ok);
+    *state.chat_running.lock().unwrap() = running;
+    let detail = if running {
+        format!("运行中：{model}，只绑定 127.0.0.1:{port}")
+    } else if !alive {
+        "聊天进程已不在。下一步：回到「运行」页重新启动。本次状态已改为未运行。".to_string()
+    } else {
+        format!("进程还在，但 127.0.0.1:{port} 健康检查未通过。下一步：看 data/logs/llama-server.log，或停止后重新启动。本次状态已改为未运行。")
+    };
+    serde_json::json!({
+        "running": running,
+        "model": model,
+        "port": port,
+        "host": host,
+        "detail": detail,
+    })
 }
 #[tauri::command]
 fn open_folder(path: String) -> Result<String, String> {
@@ -856,7 +1093,12 @@ fn agent_run(state: tauri::State<AppState>, folder: String, task: String) -> Res
             "你是本地 Agent，只能用下面工具之一，输出一个 JSON，不要多余文字：{{\"tool\": \"list_dir|read_file|write_file|run_command|finish\", \"reason\": \"一句话\", \"args\": {{\"path\": \"\", \"content\": \"\", \"command\": \"\"}}}}。任务：{}。工作文件夹：{}。已完成步骤：{}",
             task, folder, steps.join("；")
         );
-        let port = *state.chat_port.lock().unwrap(); let reply = chat_ask_inner(&prompt, if port == 0 { LLAMA_PORT } else { port })?;
+        let port = *state.chat_port.lock().unwrap();
+        let running = *state.chat_running.lock().unwrap();
+        if !running || port == 0 {
+            return Err(chat_proto::err_not_running());
+        }
+        let reply = chat_ask_inner(&prompt, port)?;
         let json_text = reply
             .find('{')
             .and_then(|s| reply.rfind('}').map(|e| &reply[s..=e]))
@@ -939,7 +1181,14 @@ fn extract_content(task: &str) -> Option<String> {
 fn main() {
     ensure_dirs();
     tauri::Builder::default()
-        .manage(AppState { chat_running: Mutex::new(false), chat_model: Mutex::new(String::new()), chat_port: Mutex::new(0), tray_enabled: Mutex::new(true) })
+        .manage(AppState {
+            chat_running: Mutex::new(false),
+            chat_model: Mutex::new(String::new()),
+            chat_port: Mutex::new(0),
+            chat_pid: Mutex::new(None),
+            tray_enabled: Mutex::new(true),
+            chat_gen: AtomicU64::new(0),
+        })
         .invoke_handler(tauri::generate_handler![
             get_hardware,
             get_catalog,
@@ -951,6 +1200,8 @@ fn main() {
             start_chat,
             stop_chat,
             chat_ask,
+            chat_stream,
+            cancel_chat,
             generate_image,
             generate_motion_video,
             generate_diffusion_video,

@@ -5,6 +5,12 @@ let catFilter = 'fit';
 let runCtx = 'auto';
 let webOn = false;
 let chatAttachments = [];
+let chatTurns = [];
+let sending = false;
+let sendGen = 0;
+let activeReply = null;
+let startInFlight = false;
+let knownModels = [];
 function hasTauri() {
   return !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function");
 }
@@ -494,54 +500,94 @@ async function refreshMediaEmpty(which) {
 }
 function refreshImgEmpty() { return refreshMediaEmpty("img"); }
 function refreshVidEmpty() { return refreshMediaEmpty("vid"); }
-async function refreshChatModel() {
+function paintRunButtons(on, s) {
+  const start = document.getElementById("startBtn");
+  if (!start || startInFlight) return;
+  start.style.display = on ? "none" : "inline-block";
+  const stop = document.getElementById("stopBtn");
+  const chat = document.getElementById("chatBtn");
+  if (stop) stop.style.display = on ? "inline-block" : "none";
+  if (chat) chat.style.display = on ? "inline-block" : "none";
+  const st = document.getElementById("run-state");
+  if (st) st.textContent = on ? "运行中" : "未运行";
+  const card = document.getElementById("runcard");
+  if (on && s) {
+    if (card) card.style.display = "block";
+    const title = document.getElementById("run-title");
+    if (title) title.textContent = "运行中 · " + (s.model || "");
+    const sub = document.getElementById("run-sub");
+    if (sub) sub.textContent = "只绑定 127.0.0.1，健康检查通过才显示运行中";
+    const api = document.getElementById("run-api");
+    if (api) api.textContent = (window.OpenLocChat ? OpenLocChat.loopbackUrl(s.port || getPort()) : ("http://127.0.0.1:" + (s.port || getPort()) + "/v1"));
+  } else if (card) {
+    card.style.display = "none";
+  }
+}
+function applyChatStatus(s) {
+  const on = !!(s && s.running);
   const dot = document.getElementById("modelDot");
-  if (!dot) return;
+  if (dot) {
+    dot.classList.toggle("on", on);
+    dot.title = on ? "本地模型运行中" : "本地模型未启动";
+  }
+  const ad = document.getElementById("agentDot");
+  if (ad) { ad.classList.toggle("on", on); ad.title = on ? "本地模型运行中" : "本地模型未启动"; }
+  const al = document.getElementById("agentModelLabel");
+  if (al) al.textContent = on && s.model ? ("本地模型：" + s.model) : "本地模型：还没有启动";
+  const line = document.getElementById("chat-service-line");
+  if (line) {
+    if (!hasTauri()) line.textContent = "网页预览没有本机聊天服务。安装、启动和对话要在桌面版里做。";
+    else line.textContent = (s && s.detail) ? s.detail : (on ? "运行中" : "未启动");
+  }
+  const next = document.getElementById("chat-empty-next");
+  if (next) {
+    next.textContent = on
+      ? "本机聊天服务已在运行。直接发消息即可。对话只发到 127.0.0.1，不会上传。"
+      : "本地模型还没有启动。先在「运行」页启动一个模型，再在这里发消息。";
+  }
+  const chatSel = document.getElementById("chatmodel");
+  if (chatSel) {
+    if (on && s.model) {
+      chatSel.innerHTML = `<option value="${escHtml(s.model)}">${escHtml(s.model)}</option>`;
+      chatSel.value = s.model;
+    } else {
+      const label = knownModels.length
+        ? "本地模型：还没有启动（已下载 " + knownModels.length + " 个）"
+        : "本地模型：还没有启动";
+      chatSel.innerHTML = `<option value="">${escHtml(label)}</option>`;
+    }
+  }
+  paintRunButtons(on, s);
+}
+async function refreshChatModel() {
   if (!hasTauri()) {
-    dot.classList.remove("on");
-    dot.title = "本地模型未启动";
+    applyChatStatus(null);
     return;
   }
   try {
-    const s = await invoke("get_chat_status");
-    const on = !!s.running;
-    dot.classList.toggle("on", on);
-    dot.title = on ? "本地模型运行中" : "本地模型未启动";
-    const ad = document.getElementById("agentDot");
-    if (ad) { ad.classList.toggle("on", on); ad.title = dot.title; }
-    const al = document.getElementById("agentModelLabel");
-    if (al) al.textContent = on && s.model ? ("本地模型：" + s.model) : "本地模型：还没有启动";
-    const sel = document.getElementById("chatmodel");
-    if (sel && on && s.model && [...sel.options].some((o) => o.value === s.model)) sel.value = s.model;
+    applyChatStatus(await invoke("get_chat_status"));
   } catch (e) {
-    dot.classList.remove("on");
-    dot.title = "本地模型未启动";
+    applyChatStatus({ running: false, detail: "没能确认聊天服务状态：" + e + "。下一步：打开「运行」页重新启动。" });
   }
 }
 window.loadModels = async function() {
-  let list;
+  let list = [];
   try { list = await invoke("list_local_models"); }
-  catch (e) {
-    const chatSel = document.getElementById("chatmodel");
-    if (chatSel && chatSel.options.length === 0) chatSel.innerHTML = '<option value="">本地模型：还没有启动</option>';
-    refreshChatModel();
-    return;
-  }
+  catch (e) { list = []; }
+  knownModels = Array.isArray(list) ? list : [];
   const ml = document.getElementById("modellist");
-  if (ml) ml.innerHTML = list.map((m) => `<li>${escHtml(m)}</li>`).join("");
-  const chatSel = document.getElementById("chatmodel");
-  if (chatSel) {
-    const prev = chatSel.value;
-    chatSel.innerHTML = '<option value="">本地模型：还没有启动</option>' + list.map((m) => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join("");
-    chatSel.value = prev && list.includes(prev) ? prev : "";
-  }
+  if (ml) ml.innerHTML = knownModels.map((m) => `<li>${escHtml(m)}</li>`).join("");
   for (const id of ["imgmodel", "vidmodel", "runmodel"]) {
     const sel = document.getElementById(id);
     if (!sel) continue;
-    if (!list.length) sel.innerHTML = '<option value="">还没有已安装模型</option>';
-    else sel.innerHTML = list.map((m) => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join("");
+    const prev = sel.value;
+    if (!knownModels.length) sel.innerHTML = '<option value="">还没有已安装模型</option>';
+    else {
+      sel.innerHTML = knownModels.map((m) => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join("");
+      if (prev && knownModels.includes(prev)) sel.value = prev;
+    }
   }
-  refreshChatModel();
+  await refreshChatModel();
   updatePlan();
 };
 window.importModel = async function() {
@@ -634,56 +680,74 @@ window.startRunModel = async function() {
     document.getElementById("run-state").textContent = "网页预览";
     return;
   }
-  if (!authOn("openloc-auth-chat")) { alert("你没授权 OpenLoc 启动聊天服务：去设置 → 授权控制，勾上“允许启动 / 停止聊天服务”。"); return; }
-  const m = document.getElementById("runmodel").value; if (!m) { alert("先在模型页下载或导入一个模型。"); return; }
+  if (!authOn("openloc-auth-chat")) {
+    document.getElementById("runmsg").textContent = "你没授权 OpenLoc 启动聊天服务。下一步：打开「设置」→ 授权控制，勾上“允许启动 / 停止聊天服务”。";
+    return;
+  }
+  const m = document.getElementById("runmodel").value;
+  if (!m) {
+    document.getElementById("runmsg").textContent = "还没有选择已下载的 GGUF。下一步：到「模型」页下载或按路径导入，再回到这一页选择它。";
+    return;
+  }
   const ctx = runCtx === 'auto' ? 16384 : runCtx;
   const card = document.getElementById("startcard"); card.style.display = "block";
   document.getElementById("start-title").textContent = "正在启动 " + m;
-  document.getElementById("run-state").textContent = "正在加载";
+  document.getElementById("run-state").textContent = "等待健康检查";
+  document.getElementById("runmsg").textContent = "";
+  startInFlight = true;
   const t0 = Date.now();
   const timer = setInterval(() => {
     const s = Math.floor((Date.now() - t0) / 1000);
-    document.getElementById("start-sub").textContent = "读取模型信息 · 已用 " + s + " 秒";
-    const pct = Math.min(95, Math.floor(s / 60 * 100));
-    document.getElementById("start-pct").textContent = pct + "%";
-    document.getElementById("start-bar").style.width = pct + "%";
-    document.getElementById("start-log").textContent = s < 5 ? "准备…" : s < 20 ? "读取模型…" : s < 40 ? "分配缓存…" : "预热…";
+    document.getElementById("start-sub").textContent = "等待 127.0.0.1:" + getPort() + " 健康检查 · 已用 " + s + " 秒";
+    document.getElementById("start-pct").textContent = "未完成";
+    document.getElementById("start-bar").style.width = "40%";
+    document.getElementById("start-log").textContent = "健康检查返回 ok 之前，不会把状态标成运行中。这不是完成比例。";
   }, 1000);
   try {
     const r = await invoke("start_chat", { model: m, ctx: ctx, port: getPort() });
     clearInterval(timer);
-    document.getElementById("start-pct").textContent = "100%";
+    startInFlight = false;
+    document.getElementById("start-title").textContent = "健康检查已通过";
+    document.getElementById("start-pct").textContent = "已通过";
     document.getElementById("start-bar").style.width = "100%";
-    document.getElementById("start-log").textContent = "完成：" + r;
-    document.getElementById("run-state").textContent = "正在运行";
-    document.getElementById("startBtn").style.display = "none";
-    document.getElementById("stopBtn").style.display = "inline-block";
-    document.getElementById("chatBtn").style.display = "inline-block";
+    document.getElementById("start-log").textContent = r;
+    document.getElementById("run-state").textContent = "运行中";
     const lanOn = document.getElementById("lanBtn") && document.getElementById("lanBtn").getAttribute("aria-checked") === "true";
-    document.getElementById("runmsg").textContent = r + "（思考模式：" + (document.getElementById("thinkmode").checked ? "开" : "关") + "，仅支持思考的模型有效）" + (lanOn ? " 已记下局域网访问，但服务仍只绑定 127.0.0.1，没有对局域网开放。" : "");
-    const h = await invoke("get_hardware");
-    const list = await invoke("list_local_model_info");
-    const info = list.find(x => x.name === m);
-    document.getElementById("runcard").style.display = "block";
-    document.getElementById("run-title").textContent = "运行中 · " + m;
-    document.getElementById("run-sub").textContent = "实际按空闲显存自动分配";
-    document.getElementById("run-vram").textContent = (info ? info.size_gb.toFixed(1) : "—") + " GB / " + (h.gpu_vram_gb ? h.gpu_vram_gb.toFixed(1) + " GB" : "无");
-    document.getElementById("run-mem").textContent = h.memory_gb.toFixed(1) + " GB / " + h.memory_total_gb.toFixed(0) + " GB";
-    document.getElementById("run-api").textContent = "http://127.0.0.1:" + getPort() + "/v1";
-    document.getElementById("runlog").textContent = "聊天服务已启动：" + m + "，端口 " + getPort();
+    document.getElementById("runmsg").textContent = r + "（思考模式：" + (document.getElementById("thinkmode").checked ? "开" : "关") + "，只有引擎真的返回思考片段才会显示）" + (lanOn ? " 已记下局域网访问，但服务仍只绑定 127.0.0.1，没有对局域网开放。" : "");
+    document.getElementById("runlog").textContent = r;
+    try {
+      const h = await invoke("get_hardware");
+      const list = await invoke("list_local_model_info");
+      const info = list.find(x => x.name === m);
+      document.getElementById("run-vram").textContent = (info ? info.size_gb.toFixed(1) : "—") + " GB / " + (h.gpu_vram_gb ? h.gpu_vram_gb.toFixed(1) + " GB" : "无");
+      document.getElementById("run-mem").textContent = h.memory_gb.toFixed(1) + " GB / " + h.memory_total_gb.toFixed(0) + " GB";
+    } catch (e) {
+      document.getElementById("runlog").textContent = r + "\n硬件数字没刷新：" + e;
+    }
+    await refreshChatModel();
   } catch (e) {
     clearInterval(timer);
-    document.getElementById("runmsg").textContent = "失败：" + e;
-    document.getElementById("run-state").textContent = "准备运行";
+    startInFlight = false;
+    const text = String(e);
+    document.getElementById("start-title").textContent = "没有启动成功";
+    document.getElementById("start-pct").textContent = "";
+    document.getElementById("start-bar").style.width = "0";
+    document.getElementById("start-log").textContent = text;
+    document.getElementById("runmsg").textContent = text;
+    document.getElementById("runlog").textContent = text;
+    document.getElementById("run-state").textContent = "未运行";
+    await refreshChatModel();
   }
 };
 window.stopRunModel = async function() {
-  try { alert(await invoke("stop_chat")); } catch (e) { alert("失败：" + e); }
-  document.getElementById("startBtn").style.display = "inline-block";
-  document.getElementById("stopBtn").style.display = "none";
-  document.getElementById("chatBtn").style.display = "none";
-  document.getElementById("runcard").style.display = "none";
-  document.getElementById("run-state").textContent = "准备运行";
+  try {
+    const r = await invoke("stop_chat");
+    document.getElementById("runmsg").textContent = r;
+    document.getElementById("runlog").textContent = r;
+  } catch (e) {
+    document.getElementById("runmsg").textContent = "没有停止成功：" + e + "。下一步：到设置里刷新后台程序，确认 llama-server 是否还在。";
+  }
+  await refreshChatModel();
 };
 window.copyApi = function() { const t = document.getElementById("run-api").textContent; try { navigator.clipboard.writeText(t); alert("已复制：" + t); } catch (e) { alert(t); } };
 window.startChat = async function() {
@@ -742,58 +806,137 @@ function addMsg(role, text) {
   box.appendChild(d); box.scrollTop = box.scrollHeight;
   return d;
 }
+function thinkOn() {
+  const box = document.getElementById("thinkmode");
+  return !box || box.checked;
+}
+function setSending(on) {
+  sending = on;
+  const btn = document.getElementById("sendBtn");
+  if (!btn) return;
+  btn.classList.toggle("stop", on);
+  btn.setAttribute("aria-label", on ? "停止生成" : "发送");
+  btn.title = on ? "停止生成" : "发送";
+  btn.innerHTML = on
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.2"/></svg>'
+    : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></svg>';
+}
+function paintActive() {
+  if (!activeReply) return;
+  activeReply.el.textContent = OpenLocChat.renderAi(activeReply.state);
+}
+window.onSendClick = function() {
+  if (sending) cancelSend();
+  else sendChat();
+};
+window.cancelSend = async function() {
+  const current = activeReply;
+  sendGen += 1;
+  if (current) {
+    current.state = OpenLocChat.reduceStream(current.state, { kind: "cancelled", text: "" });
+    current.el.textContent = OpenLocChat.renderAi(current.state);
+  }
+  activeReply = null;
+  setSending(false);
+  if (!hasTauri()) return;
+  try { await invoke("cancel_chat"); }
+  catch (e) { setComposerNote("停止请求没有送到本机服务：" + OpenLocChat.errText(e) + "。界面已不再等待后续文字。"); }
+};
 window.sendChat = async function() {
+  if (sending) return;
   const raw = document.getElementById("chatin").value.trim();
   const atts = chatAttachments.slice();
-  if (!raw && !atts.length) return;
+  const plan = OpenLocChat.planSend({
+    raw: raw,
+    attachmentNames: atts.map((a) => a.name),
+    webOn: webOn,
+    hasTauri: hasTauri(),
+  });
+  if (plan.kind === "empty") return;
   document.getElementById("chatin").value = "";
   setComposerNote("");
-  const names = atts.map((a) => a.name).join("、");
-  let shown = raw;
-  if (atts.length) {
-    const tail = "（本机附件：" + names + "。只留在这条对话里，没有上传；本地模型目前只接收文字。）";
-    shown = raw ? raw + "\n" + tail : tail;
-  }
-  addMsg("user", shown);
+  addMsg("user", plan.shown);
   clearAttachments();
-  if (!raw) {
-    addMsg("ai", "附件已记在上面。没有文字问题，这次没有发给模型，也没有把图片当成已识别的内容。");
+  if (plan.kind === "attachment-only" || plan.kind === "preview") {
+    addMsg("ai", plan.reply);
     return;
   }
-  let ask = raw;
-  if (atts.length) ask += "\n（用户在本机附了文件，当前接口只接收文字，你看不到文件内容：" + names + "）";
-  if (webOn) {
-    if (!hasTauri()) {
-      addMsg("ai", "已记录「允许联网」。网页预览没有接上联网检索，本次没有搜索结果，也不会编造。");
-    } else {
-      try {
-        const res = await invoke("web_search", { query: raw });
-        const empty = !res || res.indexOf("没搜到") === 0;
-        if (empty) {
-          addMsg("ai", "联网检索没有返回可用结果。本次只把原问题发给本地模型，不附带搜索摘要。");
-        } else {
-          addMsg("ai", "联网检索结果（下面是检索返回的内容，不是模型编造）：\n" + res);
-          ask = "联网搜索结果（仅供参考，回答时以这些结果为准，不要编造更新的信息）：\n" + res + "\n\n用户问题：" + ask;
-        }
-      } catch (e) {
-        addMsg("ai", "联网检索没有接上（" + e + "）。已记录「允许联网」偏好，本次不附带搜索结果。");
-      }
+  let modelText = plan.modelText;
+  if (plan.kind === "search") {
+    try {
+      const res = await invoke("web_search", { query: plan.query });
+      const applied = OpenLocChat.afterSearch(modelText, { ok: true, text: res });
+      if (applied.note) addMsg("ai", applied.note);
+      modelText = applied.modelText;
+    } catch (e) {
+      const applied = OpenLocChat.afterSearch(modelText, { ok: false, error: OpenLocChat.errText(e) });
+      if (applied.note) addMsg("ai", applied.note);
+      modelText = applied.modelText;
     }
   }
-  if (!hasTauri()) {
-    addMsg("ai", "网页预览没有本地模型。请在桌面版的「运行」页启动后再发。这次没有生成回复。");
+  let status = null;
+  try { status = await invoke("get_chat_status"); }
+  catch (e) {
+    addMsg("ai", "没能确认聊天服务状态：" + OpenLocChat.errText(e) + "。下一步：打开「运行」页重新启动。本次没有编造回复。");
     return;
   }
-  const pending = addMsg("ai", "思考中…");
+  const gate = OpenLocChat.gateService(status);
+  if (!gate.ok) {
+    addMsg("ai", gate.reply);
+    return;
+  }
+  const messages = chatTurns.concat([{ role: "user", content: modelText }]);
+  chatTurns.push({ role: "user", content: modelText });
+  const pending = addMsg("ai", "正在生成本机回复…");
+  const gen = ++sendGen;
+  const state = { text: "", reasoning: "", status: "", done: false, cancelled: false, error: "" };
+  activeReply = { gen: gen, el: pending, state: state };
+  setSending(true);
+  const take = (ev) => {
+    if (!activeReply || activeReply.gen !== gen) return;
+    activeReply.state = OpenLocChat.reduceStream(activeReply.state, ev);
+    paintActive();
+  };
   try {
-    const r = await invoke("chat_ask", { message: ask });
-    pending.textContent = r ? "AI：" + r : "AI：（本地模型返回了空内容）";
+    const listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
+    if (typeof listen === "function") {
+      let settled = false;
+      const unlisten = await listen("openloc-chat", function(ev) {
+        const payload = ev && ev.payload ? ev.payload : ev;
+        if (!payload || Number(payload.id) !== gen) return;
+        take(payload);
+        if (payload.kind === "done" || payload.kind === "error" || payload.kind === "cancelled") settled = true;
+      });
+      try {
+        await invoke("chat_stream", { messages: messages, think: thinkOn(), streamId: gen });
+        const startedAt = Date.now();
+        while (!settled && gen === sendGen && Date.now() - startedAt < 300000) {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        if (!settled && gen === sendGen) {
+          take({ kind: "error", text: "请求失败：等了 300 秒还没有收完。下一步：点停止，或到「运行」页确认服务仍在。本次没有编造回复。" });
+        }
+      } finally {
+        if (typeof unlisten === "function") unlisten();
+      }
+    } else {
+      const reply = await invoke("chat_ask", { message: modelText, messages: messages, think: thinkOn() });
+      take({ kind: "delta", text: reply || "" });
+      take({ kind: "done", text: "" });
+    }
+    if (activeReply && activeReply.gen === gen && !activeReply.state.cancelled && !activeReply.state.error && activeReply.state.text) {
+      chatTurns.push({ role: "assistant", content: activeReply.state.text });
+    }
   } catch (e) {
-    pending.textContent = "本地模型没有回应：" + e + "。没有编造回复。";
+    take({ kind: "error", text: OpenLocChat.errText(e) });
+  } finally {
+    if (activeReply && activeReply.gen === gen) activeReply = null;
+    if (gen === sendGen) setSending(false);
   }
 };
 document.getElementById("chatin") && document.getElementById("chatin").addEventListener("keydown", function(e) {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!sending) sendChat(); }
+  if (e.key === "Escape" && sending) { e.preventDefault(); cancelSend(); }
 });
 window.genImg = async function() {
   if (!authOn("openloc-auth-img")) { alert("你没授权 OpenLoc 启动画图引擎：去设置 → 授权控制，勾上“允许启动画图 / 视频引擎”。"); return; }
@@ -911,6 +1054,8 @@ window.captureForAgent = async function() {
   } catch (e) { setAgentNote("没有贴上图片。" + e); }
 };
 window.newChat = function() {
+  if (sending) cancelSend();
+  chatTurns = [];
   const box = document.getElementById("chatbox");
   box.querySelectorAll(".msg-user,.msg-ai").forEach((n) => n.remove());
   const empty = document.getElementById("chat-empty");
@@ -957,4 +1102,5 @@ window.savePort = function() {
   loadImgModels();
   loadHw(); loadModels(); loadEngineStatus();
   refreshImgEmpty(); refreshVidEmpty();
+  setInterval(function() { refreshChatModel(); }, 4000);
 })();

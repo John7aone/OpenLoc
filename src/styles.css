@@ -688,7 +688,8 @@ button.task.on{border-color:var(--accent);background:var(--bg-elev)}
 #chat .chatwrap{flex:1}
 #chat .chatmain{display:flex;flex-direction:column;min-width:0}
 #chat .chatbox{flex:1;display:flex;flex-direction:column;min-height:220px}
-.chat-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.chat-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+#chat-service-line{margin:0 0 10px}
 .chat-head-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .think-flag{color:var(--muted);font-size:13px;white-space:nowrap}
 .model-pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--bg-soft);border-radius:999px;padding:4px 12px;max-width:100%}
@@ -711,6 +712,7 @@ button.toolbtn:hover{filter:none;background:var(--bg-soft)}
 button.sendbtn{width:36px;height:36px;padding:0;margin:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--accent);color:#fff}
 button.sendbtn:hover{background:var(--accent-press);filter:none}
 button.sendbtn svg{width:18px;height:18px;fill:none;stroke:#fff;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+button.sendbtn.stop{background:#1d4ed8}
 button.net-switch{display:inline-flex;align-items:center;gap:8px;background:var(--bg-soft);color:var(--text);border:1px solid var(--line);box-shadow:none;border-radius:999px;padding:6px 12px 6px 8px;margin:0;font-weight:600;font-size:13px;line-height:1.2;white-space:nowrap}
 button.net-switch .net-track{width:36px;height:20px;border-radius:999px;background:#cbd5e1;position:relative;flex-shrink:0}
 html[data-theme="dark"] button.net-switch .net-track{background:#3f4b63}

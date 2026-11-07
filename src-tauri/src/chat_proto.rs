@@ -1,0 +1,711 @@
+//! 本机 llama-server 的请求、健康检查和错误文案。
+//! 地址固定为 127.0.0.1，不把对话发到别的主机。
+
+use serde_json::Value;
+use std::time::Duration;
+
+pub const LOOPBACK_HOST: &str = "127.0.0.1";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatTurn {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SsePiece {
+    Delta(String),
+    Reasoning(String),
+    Done,
+}
+
+#[derive(Default)]
+pub struct SseParser {
+    buf: String,
+    raw: String,
+    deltas: usize,
+}
+
+impl SseParser {
+    pub fn push(&mut self, chunk: &str) -> Vec<SsePiece> {
+        self.raw.push_str(chunk);
+        self.feed(chunk)
+    }
+
+    fn feed(&mut self, chunk: &str) -> Vec<SsePiece> {
+        self.buf.push_str(chunk);
+        let mut out = Vec::new();
+        loop {
+            let Some(pos) = self.buf.find('\n') else {
+                break;
+            };
+            let mut line = self.buf[..pos].to_string();
+            self.buf.drain(..=pos);
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                out.push(SsePiece::Done);
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            if let Some(text) = delta_text(&v, &["content"]) {
+                self.deltas += 1;
+                out.push(SsePiece::Delta(text));
+            }
+            if let Some(text) = delta_text(&v, &["reasoning_content", "reasoning"]) {
+                out.push(SsePiece::Reasoning(text));
+            }
+        }
+        out
+    }
+
+    pub fn finish(&mut self) -> Result<Vec<SsePiece>, String> {
+        let mut extra = Vec::new();
+        if !self.buf.is_empty() {
+            let rest = std::mem::take(&mut self.buf);
+            extra.extend(self.feed(&(rest + "\n")));
+        }
+        if self.deltas == 0 {
+            if let Some(message) = json_api_error(&self.raw) {
+                return Err(err_http(0, &message));
+            }
+            if let Some(text) = json_message_content(&self.raw) {
+                if !text.is_empty() {
+                    self.deltas += 1;
+                    extra.push(SsePiece::Delta(text));
+                }
+            }
+        }
+        Ok(extra)
+    }
+}
+
+fn delta_text(v: &Value, keys: &[&str]) -> Option<String> {
+    let delta = v.pointer("/choices/0/delta")?;
+    for key in keys {
+        if let Some(text) = delta.get(*key).and_then(|x| x.as_str()) {
+            if !text.is_empty() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn json_message_content(raw: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(raw.trim()).ok()?;
+    v.pointer("/choices/0/message/content")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+}
+
+fn json_api_error(raw: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(raw.trim()).ok()?;
+    v.pointer("/error/message")
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub fn normalize_messages(input: Vec<(String, String)>) -> Result<Vec<ChatTurn>, String> {
+    if input.is_empty() {
+        return Err(err_empty_message());
+    }
+    if input.len() > 40 {
+        return Err(
+            "对话太长（超过 40 轮）。下一步：点「新对话」后再发。本次没有发给模型。".to_string(),
+        );
+    }
+    let mut total = 0usize;
+    let mut out = Vec::new();
+    for (role, content) in input {
+        let role = role.trim().to_ascii_lowercase();
+        if role != "user" && role != "assistant" && role != "system" {
+            return Err(format!("对话角色无效：{role}。本次没有发给模型。"));
+        }
+        let content = content.trim().to_string();
+        if content.is_empty() {
+            continue;
+        }
+        let chars = content.chars().count();
+        if chars > 20000 || total + chars > 100_000 {
+            return Err("这条对话太长，没有发送。下一步：缩短文字，或点「新对话」。".to_string());
+        }
+        total += chars;
+        out.push(ChatTurn { role, content });
+    }
+    if out.is_empty() || !out.iter().any(|m| m.role == "user") {
+        return Err(err_empty_message());
+    }
+    Ok(out)
+}
+
+pub fn chat_body(messages: &[ChatTurn], think: bool, stream: bool) -> Value {
+    let msgs: Vec<Value> = messages
+        .iter()
+        .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
+        .collect();
+    let mut body = serde_json::json!({
+        "model": "local",
+        "messages": msgs,
+        "temperature": 0.7,
+        "stream": stream,
+    });
+    if think {
+        body["chat_template_kwargs"] = serde_json::json!({"enable_thinking": true});
+    }
+    body
+}
+
+pub fn health_url(port: u16) -> String {
+    format!("http://{LOOPBACK_HOST}:{port}/health")
+}
+
+pub fn chat_url(port: u16) -> String {
+    format!("http://{LOOPBACK_HOST}:{port}/v1/chat/completions")
+}
+
+pub fn launch_args(model: &std::path::Path, port: u16, ctx: u32) -> Vec<String> {
+    vec![
+        "-m".to_string(),
+        model.display().to_string(),
+        "--host".to_string(),
+        LOOPBACK_HOST.to_string(),
+        "--port".to_string(),
+        port.to_string(),
+        "-c".to_string(),
+        ctx.to_string(),
+    ]
+}
+
+pub fn ready_to_mark_running(process_alive: bool, health_ok: bool) -> bool {
+    process_alive && health_ok
+}
+
+pub fn health_is_ready(status: u16, body: &str) -> bool {
+    if !(200..300).contains(&status) {
+        return false;
+    }
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(|s| s == "ok"))
+        .unwrap_or(false)
+}
+
+pub fn err_engine_missing() -> String {
+    "还没安装聊天引擎，找不到 llama-server。下一步：打开「运行」页，点「安装聊天引擎」，看到“找到 llama-server”后再启动。不会去调用本机别的已安装程序。".to_string()
+}
+
+pub fn err_model_missing(name: &str) -> String {
+    format!("模型文件不存在：{name}。下一步：到「模型」页下载或按完整路径导入 GGUF，确认文件在 data/models 里，再回「运行」页选择它启动。")
+}
+
+pub fn err_model_name() -> String {
+    "模型名不能包含路径。下一步：只选择 data/models 里列出的文件名。".to_string()
+}
+
+pub fn err_port_busy(port: u16) -> String {
+    format!("端口 {port} 已被占用，没有启动新的聊天服务，也没有把状态标成运行中。下一步：打开「设置」，把本地 API 端口改成一个空闲端口并保存，然后回到「运行」页重新启动。OpenLoc 不会关掉占用该端口的其他程序。")
+}
+
+pub fn err_not_running() -> String {
+    "聊天服务还没启动。下一步：打开「运行」页，选择已下载的 GGUF，点「启动模型」，等到健康检查通过、状态变成运行中，再回到对话发送。".to_string()
+}
+
+pub fn err_health_timeout(port: u16, log_tail: &str) -> String {
+    format!("聊天服务没有在 127.0.0.1:{port} 上就绪（健康检查未通过）。下一步：确认模型文件完整、端口没被占用，查看 data/logs/llama-server.log。本次没有把状态标成运行中。日志摘录：{log_tail}")
+}
+
+pub fn err_process_exited(log_tail: &str) -> String {
+    format!("聊天进程启动后退出了，健康检查没有通过。下一步：打开 data/logs/llama-server.log 看原因（常见是模型不兼容或文件损坏），换一个 GGUF 后再启动。本次没有把状态标成运行中。日志摘录：{log_tail}")
+}
+
+pub fn err_request(detail: &str) -> String {
+    format!("请求失败：{detail}。下一步：到「运行」页确认服务仍是运行中；若端口冲突，到「设置」改端口后重新启动。本次没有编造回复。")
+}
+
+pub fn err_conn_refused(port: u16) -> String {
+    format!("聊天服务未在 127.0.0.1:{port} 响应。下一步：打开「运行」页重新启动模型，确认状态是运行中后再发。本次没有编造回复。")
+}
+
+pub fn err_http(code: u16, body: &str) -> String {
+    let body = clamp(body, 300);
+    if code == 0 {
+        return format!("请求失败：{body}。下一步：到「运行」页确认服务仍是运行中。本次没有编造回复。");
+    }
+    format!("请求失败：本地聊天服务返回 HTTP {code}。{body} 下一步：确认运行页的模型已加载完成；若刚启动，等健康检查通过后再发。本次没有编造回复。")
+}
+
+pub fn err_empty_message() -> String {
+    "没有可发送的文字。下一步：在对话输入框写下问题后再发送。".to_string()
+}
+
+pub fn err_zip_no_llama() -> String {
+    "压缩包已解压，但里面没有 llama-server 或 llama-server.exe。下一步：设置里的地址应是 llama.cpp 的 Windows 可执行包（llama-b…-bin-win-cpu-x64.zip），不要填源码包，然后重新安装。".to_string()
+}
+
+pub fn err_spawn(detail: &str) -> String {
+    format!("没能启动 llama-server：{detail}。下一步：重新安装聊天引擎，确认 llama-server.exe 和它旁边的 dll 都在。")
+}
+
+fn clamp(text: &str, max_chars: usize) -> String {
+    let one_line = text.replace('\n', " ").trim().to_string();
+    if one_line.chars().count() <= max_chars {
+        one_line
+    } else {
+        one_line.chars().take(max_chars).collect::<String>() + "…"
+    }
+}
+
+pub fn map_transport_error(err: &reqwest::Error, port: u16) -> String {
+    let raw = err.to_string();
+    if err.is_connect() || raw.to_lowercase().contains("connection refused") {
+        return err_conn_refused(port);
+    }
+    if err.is_timeout() {
+        return err_request(&format!("等待 127.0.0.1:{port} 超过时限"));
+    }
+    err_request(&raw)
+}
+
+fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| err_request(&e.to_string()))
+}
+
+pub fn probe_health_blocking(port: u16, timeout: Duration) -> Result<(), String> {
+    let resp = http_client(timeout)?
+        .get(health_url(port))
+        .header("User-Agent", "OpenLoc")
+        .send()
+        .map_err(|e| map_transport_error(&e, port))?;
+    let code = resp.status().as_u16();
+    let body = resp.text().unwrap_or_default();
+    if health_is_ready(code, &body) {
+        Ok(())
+    } else {
+        Err(format!("健康检查未通过：HTTP {code} {}", clamp(&body, 180)))
+    }
+}
+
+pub fn extract_completion(v: &Value) -> String {
+    v.pointer("/choices/0/message/content")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+pub fn complete_chat(port: u16, messages: &[ChatTurn], think: bool) -> Result<String, String> {
+    let client = http_client(Duration::from_secs(300))?;
+    let first = post_blocking(&client, port, messages, think, false)?;
+    let resp = if first.status().as_u16() == 400 && think {
+        let _ = first.text().unwrap_or_default();
+        post_blocking(&client, port, messages, false, false)?
+    } else {
+        first
+    };
+    let code = resp.status().as_u16();
+    let body = resp.text().map_err(|e| map_transport_error(&e, port))?;
+    if !(200..300).contains(&code) {
+        let detail = json_api_error(&body).unwrap_or(body);
+        return Err(err_http(code, &detail));
+    }
+    let v: Value = serde_json::from_str(&body).map_err(|e| err_request(&format!("回复不是 JSON：{e}")))?;
+    if let Some(message) = v
+        .pointer("/error/message")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        return Err(err_http(code, message));
+    }
+    Ok(extract_completion(&v))
+}
+
+fn post_blocking(
+    client: &reqwest::blocking::Client,
+    port: u16,
+    messages: &[ChatTurn],
+    think: bool,
+    stream: bool,
+) -> Result<reqwest::blocking::Response, String> {
+    client
+        .post(chat_url(port))
+        .header("User-Agent", "OpenLoc")
+        .json(&chat_body(messages, think, stream))
+        .send()
+        .map_err(|e| map_transport_error(&e, port))
+}
+
+pub struct StreamOutcome {
+    pub cancelled: bool,
+}
+
+pub async fn open_and_read_stream(
+    port: u16,
+    messages: &[ChatTurn],
+    think: bool,
+    mut stop: impl FnMut() -> bool,
+    mut on_note: impl FnMut(String),
+    mut on_piece: impl FnMut(SsePiece),
+) -> Result<StreamOutcome, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| err_request(&e.to_string()))?;
+    let first = post_async(&client, port, messages, think, true).await?;
+    let (resp, note) = if first.status().as_u16() == 400 && think {
+        let _ = first.text().await.unwrap_or_default();
+        let again = post_async(&client, port, messages, false, true).await?;
+        (
+            again,
+            Some(
+                "思考开关未被当前引擎接受，这次按普通对话发送，没有编造思考过程。".to_string(),
+            ),
+        )
+    } else {
+        (first, None)
+    };
+    let code = resp.status().as_u16();
+    if !(200..300).contains(&code) {
+        let body = resp.text().await.unwrap_or_default();
+        let detail = json_api_error(&body).unwrap_or(body);
+        return Err(err_http(code, &detail));
+    }
+    if let Some(text) = note.clone() {
+        on_note(text);
+    }
+    let mut parser = SseParser::default();
+    let mut cancelled = false;
+    let mut resp = resp;
+    while let Some(chunk) = resp.chunk().await.map_err(|e| map_transport_error(&e, port))? {
+        if stop() {
+            cancelled = true;
+            break;
+        }
+        let text = String::from_utf8_lossy(&chunk);
+        for piece in parser.push(&text) {
+            on_piece(piece);
+        }
+    }
+    if !cancelled {
+        for piece in parser.finish()? {
+            on_piece(piece);
+        }
+    }
+    Ok(StreamOutcome { cancelled })
+}
+
+async fn post_async(
+    client: &reqwest::Client,
+    port: u16,
+    messages: &[ChatTurn],
+    think: bool,
+    stream: bool,
+) -> Result<reqwest::Response, String> {
+    client
+        .post(chat_url(port))
+        .header("User-Agent", "OpenLoc")
+        .json(&chat_body(messages, think, stream))
+        .send()
+        .await
+        .map_err(|e| map_transport_error(&e, port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn launch_and_urls_stay_on_loopback() {
+        let args = launch_args(std::path::Path::new("demo.gguf"), 18080, 4096);
+        assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
+        assert!(!args.iter().any(|a| a == "0.0.0.0" || a == "localhost"));
+        assert!(health_url(8080).starts_with("http://127.0.0.1:8080/"));
+        assert!(chat_url(8080).contains("127.0.0.1"));
+        assert!(!chat_url(8080).contains("0.0.0.0"));
+    }
+
+    #[test]
+    fn health_and_running_flag_follow_the_probe() {
+        assert!(health_is_ready(200, r#"{"status":"ok"}"#));
+        assert!(!health_is_ready(200, r#"{"status":"loading"}"#));
+        assert!(!health_is_ready(503, r#"{"status":"ok"}"#));
+        assert!(!ready_to_mark_running(true, false));
+        assert!(!ready_to_mark_running(false, true));
+        assert!(ready_to_mark_running(true, true));
+    }
+
+    #[test]
+    fn errors_name_the_next_step() {
+        for text in [
+            err_engine_missing(),
+            err_model_missing("missing.gguf"),
+            err_port_busy(8080),
+            err_not_running(),
+            err_health_timeout(8080, "boom"),
+            err_process_exited("exit"),
+            err_request("超时"),
+            err_conn_refused(8080),
+            err_http(500, "bad"),
+            err_zip_no_llama(),
+        ] {
+            assert!(text.contains("下一步"), "{text}");
+        }
+        assert!(err_model_missing("a.gguf").contains("a.gguf"));
+        assert!(err_port_busy(8081).contains("8081"));
+        assert!(err_conn_refused(9).contains("127.0.0.1:9"));
+    }
+
+    #[test]
+    fn sse_parser_handles_split_chunks_done_and_reasoning() {
+        let mut p = SseParser::default();
+        let mut all = Vec::new();
+        all.extend(p.push("data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n"));
+        all.extend(p.push("\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想\"}}]}\n\n"));
+        all.extend(p.push("data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\ndata: [DONE]\n\n"));
+        assert_eq!(
+            all,
+            vec![
+                SsePiece::Delta("你".into()),
+                SsePiece::Reasoning("想".into()),
+                SsePiece::Delta("好".into()),
+                SsePiece::Done,
+            ]
+        );
+    }
+
+    #[test]
+    fn sse_finish_reads_non_stream_json_and_errors() {
+        let mut p = SseParser::default();
+        p.push(r#"{"choices":[{"message":{"content":"完整回复"}}]}"#);
+        let got = p.finish().unwrap();
+        assert_eq!(got, vec![SsePiece::Delta("完整回复".into())]);
+
+        let mut bad = SseParser::default();
+        bad.push(r#"{"error":{"message":"模型还没加载"}}"#);
+        let err = bad.finish().unwrap_err();
+        assert!(err.contains("模型还没加载"));
+        assert!(err.contains("下一步"));
+    }
+
+    #[test]
+    fn think_flag_is_omitted_unless_asked() {
+        let turns = vec![ChatTurn {
+            role: "user".into(),
+            content: "hi".into(),
+        }];
+        let off = chat_body(&turns, false, true);
+        assert!(off.get("chat_template_kwargs").is_none());
+        assert_eq!(off["stream"], true);
+        let on = chat_body(&turns, true, false);
+        assert_eq!(on["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(on["messages"][0]["content"], "hi");
+    }
+
+    #[test]
+    fn normalize_rejects_empty_and_keeps_roles() {
+        assert!(normalize_messages(vec![]).unwrap_err().contains("下一步"));
+        let ok = normalize_messages(vec![
+            ("user".into(), " 问 ".into()),
+            ("assistant".into(), "答".into()),
+        ])
+        .unwrap();
+        assert_eq!(ok[0].content, "问");
+        assert!(normalize_messages(vec![("tool".into(), "x".into())]).is_err());
+    }
+
+    fn serve(script: Vec<(u16, &'static str)>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let script = Arc::new(Mutex::new(script));
+        thread::spawn(move || {
+            for _ in 0..8 {
+                let Ok((mut sock, _)) = listener.accept() else { break };
+                let _ = sock.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 2048];
+                loop {
+                    match sock.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                                let content_len = head
+                                    .lines()
+                                    .find_map(|line| {
+                                        let (k, v) = line.split_once(':')?;
+                                        if k.eq_ignore_ascii_case("content-length") {
+                                            v.trim().parse::<usize>().ok()
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(0);
+                                while buf.len() < pos + 4 + content_len {
+                                    match sock.read(&mut tmp) {
+                                        Ok(0) | Err(_) => break,
+                                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let text = String::from_utf8_lossy(&buf).to_string();
+                let mut queue = script.lock().unwrap();
+                if queue.is_empty() {
+                    break;
+                }
+                let (code, body) = queue.remove(0);
+                let reason = if code == 200 { "OK" } else { "Bad Request" };
+                let resp = format!(
+                    "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+                let _ = text;
+            }
+        });
+        thread::sleep(Duration::from_millis(30));
+        port
+    }
+
+    #[test]
+    fn complete_chat_reads_mock_and_retries_without_thinking() {
+        let port = serve(vec![
+            (400, r#"{"error":{"message":"unknown field chat_template_kwargs"}}"#),
+            (200, r#"{"choices":[{"message":{"content":"本地回复"}}]}"#),
+        ]);
+        let turns = normalize_messages(vec![("user".into(), "你好".into())]).unwrap();
+        let text = complete_chat(port, &turns, true).unwrap();
+        assert_eq!(text, "本地回复");
+    }
+
+    #[test]
+    fn complete_chat_refused_port_is_a_clear_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let turns = normalize_messages(vec![("user".into(), "你好".into())]).unwrap();
+        let err = complete_chat(port, &turns, false).unwrap_err();
+        assert!(err.contains("127.0.0.1"), "{err}");
+        assert!(err.contains("下一步"), "{err}");
+    }
+
+    #[test]
+    fn probe_health_accepts_only_ok() {
+        let port = serve(vec![(200, r#"{"status":"loading"}"#)]);
+        let err = probe_health_blocking(port, Duration::from_secs(2)).unwrap_err();
+        assert!(err.contains("健康检查未通过"), "{err}");
+        let port = serve(vec![(200, r#"{"status":"ok"}"#)]);
+        probe_health_blocking(port, Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn live_model_roundtrip_when_env_set() {
+        let Ok(port_text) = std::env::var("OPENLOC_LIVE_PORT") else {
+            return;
+        };
+        let port: u16 = port_text.parse().expect("OPENLOC_LIVE_PORT");
+        probe_health_blocking(port, Duration::from_secs(5)).expect("健康检查");
+        let turns = normalize_messages(vec![(
+            "user".into(),
+            "Reply with exactly: pong".into(),
+        )])
+        .unwrap();
+        let text = complete_chat(port, &turns, false).expect("对话");
+        assert!(!text.trim().is_empty(), "真实模型返回空内容");
+        eprintln!("LIVE_REPLY={}", text.replace('\n', " "));
+    }
+
+    #[tokio::test]
+    async fn live_model_stream_when_env_set() {
+        let Ok(port_text) = std::env::var("OPENLOC_LIVE_PORT") else {
+            return;
+        };
+        let port: u16 = port_text.parse().expect("OPENLOC_LIVE_PORT");
+        let turns = normalize_messages(vec![("user".into(), "Hi".into())]).unwrap();
+        let mut text = String::new();
+        let outcome = open_and_read_stream(
+            port,
+            &turns,
+            false,
+            || false,
+            |_| {},
+            |piece| {
+                if let SsePiece::Delta(part) = piece {
+                    text.push_str(&part);
+                }
+            },
+        )
+        .await
+        .expect("流式对话");
+        assert!(!outcome.cancelled);
+        assert!(!text.trim().is_empty(), "流式回复是空的");
+        eprintln!("LIVE_STREAM={}", text.replace('\n', " "));
+    }
+
+    #[tokio::test]
+    async fn stream_can_cancel_before_the_rest_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let _ = sock.set_nodelay(true);
+            let _ = sock.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf);
+            let part1 = "data: {\"choices\":[{\"delta\":{\"content\":\"甲\"}}]}\n\n";
+            let part2 = "data: {\"choices\":[{\"delta\":{\"content\":\"乙\"}}]}\n\ndata: [DONE]\n\n";
+            let len = part1.len() + part2.len();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+            );
+            sock.write_all(head.as_bytes()).unwrap();
+            sock.write_all(part1.as_bytes()).unwrap();
+            thread::sleep(Duration::from_millis(250));
+            let _ = sock.write_all(part2.as_bytes());
+        });
+        let turns = normalize_messages(vec![("user".into(), "问".into())]).unwrap();
+        let mut calls = 0;
+        let mut got = Vec::new();
+        let outcome = open_and_read_stream(
+            port,
+            &turns,
+            false,
+            || {
+                calls += 1;
+                calls > 1
+            },
+            |_| {},
+            |piece| got.push(piece),
+        )
+        .await
+        .unwrap();
+        assert!(outcome.cancelled, "流没有在第二段停下");
+        assert_eq!(got, vec![SsePiece::Delta("甲".into())]);
+    }
+}
