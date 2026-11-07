@@ -27,179 +27,316 @@
 </aside>
 
 <main class="main">
-<div id="overview" class="tab on">
+<div id="preview-banner" class="preview-banner">网页预览：可以看各页布局。硬件数字、下载和启动引擎不会在浏览器里真的执行。桌面版 OpenLoc 才会做这些事。</div>
+<div id="action-note" class="composer-note" hidden></div>
 <div class="steps">
-<div class="step" id="step-hw" data-step="1"><span class="num" id="step-hw-num">1</span><div class="step-copy"><b>看本机硬件</b><small id="step-hw-sub">正在检测…</small></div><span class="status" id="step-hw-status">检测中</span></div>
-<div class="step" id="step-engine" data-step="2"><span class="num">2</span><div class="step-copy"><b>装 / 启引擎</b><small id="step-engine-sub">安装和启动在运行页</small></div><button type="button" class="sec" onclick="tab('md')">去运行</button></div>
-<div class="step" id="step-model" data-step="3"><span class="num">3</span><div class="step-copy"><b>下载模型</b><small id="step-model-sub">到模型页下载 GGUF</small></div><button type="button" class="sec" onclick="tab('cat')">去模型</button></div>
-<div class="step step-use" id="step-use" data-step="4"><span class="num">4</span><div class="step-copy"><b>开始用</b><small id="step-use-sub">对话、画图或视频</small></div><div class="step-actions"><button type="button" class="sec" onclick="tab('chat')">去对话</button><button type="button" class="sec" onclick="tab('img')">去画图</button><button type="button" class="sec" onclick="tab('vid')">去视频</button></div></div>
-</div>
-<div class="grid2">
-<div class="card">
-<div class="row" style="justify-content:space-between"><h3>本机硬件</h3><button type="button" class="sec" onclick="loadHw()">重新检测</button></div>
-<p class="muted small" id="gpu-status">正在检测…</p>
-<div class="hwrows">
-<div class="hwrow"><div class="hwleft"><span class="hwicon">🎮</span><div><b>显卡</b><div class="muted small" id="hw-gpu-sub"></div></div></div><b id="hw-gpu">检测中…</b></div>
-<div class="hwrow"><div class="hwleft"><span class="hwicon">💻</span><div><b>处理器</b><div class="muted small" id="hw-cpu-sub"></div></div></div><b id="hw-cpu"></b></div>
-<div class="hwrow"><div class="hwleft"><span class="hwicon">🧠</span><div><b>内存</b><div class="muted small" id="hw-mem-sub"></div></div></div><b id="hw-mem"></b></div>
-<div class="hwrow"><div class="hwleft"><span class="hwicon">💾</span><div><b>模型盘</b><div class="muted small" id="hw-disk-sub"></div></div></div><b id="hw-disk"></b></div>
-</div>
-<div class="barlabel"><span>显存</span><span id="vram-text"></span></div><div class="bar"><div id="vram-bar" class="fill teal"></div></div>
-<div class="barlabel"><span>内存</span><span id="mem-text"></span></div><div class="bar"><div id="mem-bar" class="fill indigo"></div></div>
-<div class="barlabel"><span>硬盘</span><span id="disk-text"></span></div><div class="bar"><div id="disk-bar" class="fill slate"></div></div>
-<div class="row" style="margin-top:12px"><button type="button" class="sec" onclick="tab('settings')">更改模型盘</button></div>
-</div>
-<div class="card">
-<h3 id="rec-title">检测硬件后，这里会给出推荐</h3>
-<p class="muted" id="rec-desc">点“重新检测硬件”，程序会根据你的显存和内存算一个能流畅跑的模型大小。显存不够时，模型会分到内存里跑，速度会变慢，这是正常的。</p>
-<div id="recmodels"><p class="muted">正在按你的硬件算推荐…</p></div>
-<button type="button" class="sec" onclick="tab('cat')">全部模型</button>
-</div>
-</div>
+<div class="step" id="step-hw"><span class="num" id="step-hw-num">1</span><div class="step-copy"><b>看本机硬件</b><small id="step-hw-sub">正在检测…</small></div><span class="status" id="step-hw-status">检测中</span></div>
+<div class="step" id="step-engine"><span class="num">2</span><div class="step-copy"><b>装 / 启引擎</b><small id="step-engine-sub">安装和启动在运行页</small></div><button type="button" class="sec" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行</button></div>
+<div class="step" id="step-model"><span class="num">3</span><div class="step-copy"><b>下载模型</b><small id="step-model-sub">到模型页下载 GGUF</small></div><button type="button" class="sec" onclick="tab('cat', document.querySelector('#nav [data-page=cat]'))">去模型</button></div>
+<div class="step step-use" id="step-use"><span class="num">4</span><div class="step-copy"><b>开始用</b><small>对话、画图或视频</small></div><div class="step-actions"><button type="button" class="sec" onclick="tab('chat', document.querySelector('#nav [data-page=chat]'))">去对话</button><button type="button" class="sec" onclick="tab('img', document.querySelector('#nav [data-page=img]'))">去画图</button><button type="button" class="sec" onclick="tab('vid', document.querySelector('#nav [data-page=vid]'))">去视频</button></div></div>
 </div>
 
-<div id="cat" class="tab card">
-<div class="row" style="justify-content:space-between"><h2>模型</h2><button type="button" onclick="importPrompt()">导入本地 GGUF</button></div>
-<div id="cat-empty" class="empty"><p id="cat-empty-text">还没有下载模型。</p><button type="button" onclick="goDownloadModel()">去下载推荐模型</button></div>
-<p class="muted">16 个公开推荐模型，均为 Hugging Face 上公开的 unsloth GGUF 仓库。描述是本程序自己写的，大模型先看“是否适合”再下。</p>
+<div id="overview" class="tab on">
+<div class="card hero">
+<div class="hero-grid">
+<div>
+<h2 id="rec-title">还不知道这台电脑能流畅跑多大的模型</h2>
+<p class="muted" id="rec-desc">模型能放进显存才流畅。放不进显存就分到内存，速度会变慢。显存不够时不要只看内存大小。</p>
+<div class="hero-chip" id="hero-chip">尚未选定推荐模型</div>
+<div class="layerbar unknown" id="layerbar" title="显卡、内存、硬盘的分层示意">
+<div class="seg gpu"><b>显卡</b><span id="layer-gpu-t">未检测</span></div>
+<div class="seg ram"><b>内存</b><span id="layer-ram-t">未检测</span></div>
+<div class="seg disk"><b>硬盘</b><span id="layer-disk-t">兜底</span></div>
+</div>
+<p class="muted small" id="layer-cap">模型先放进显卡，放不下的部分再放到内存。越靠左越快。网页预览没有你的真实容量时，这三条只是分层示意。</p>
+<div class="hero-actions"><button type="button" id="hero-dl" onclick="askDownload('', this)">下载推荐量化</button><span class="muted small">大小以 Hugging Face 仓库为准，这里不预填一个假的文件体积。</span></div>
+</div>
+<div class="specs">
+<div class="hwrows">
+<div class="hwrow"><div class="hwleft"><span class="hwicon">显</span><div><b>显卡</b><div class="muted small" id="hw-gpu-sub">未检测</div></div></div><b id="hw-gpu">未检测</b></div>
+<div class="hwrow"><div class="hwleft"><span class="hwicon">处</span><div><b>处理器</b><div class="muted small" id="hw-cpu-sub">未检测</div></div></div><b id="hw-cpu">未检测</b></div>
+<div class="hwrow"><div class="hwleft"><span class="hwicon">存</span><div><b>内存</b><div class="muted small" id="hw-mem-sub">未检测</div></div></div><b id="hw-mem">未检测</b></div>
+<div class="hwrow"><div class="hwleft"><span class="hwicon">盘</span><div><b>模型盘</b><div class="muted small" id="hw-disk-sub">未检测</div></div></div><b id="hw-disk">未检测</b></div>
+</div>
+<div class="barlabel"><span>显存</span><span id="vram-text">未检测</span></div><div class="bar"><div id="vram-bar" class="fill teal" style="width:0"></div></div>
+<div class="barlabel"><span>内存</span><span id="mem-text">未检测</span></div><div class="bar"><div id="mem-bar" class="fill indigo" style="width:0"></div></div>
+<div class="barlabel"><span>硬盘</span><span id="disk-text">未检测</span></div><div class="bar"><div id="disk-bar" class="fill slate" style="width:0"></div></div>
+<div class="row" style="margin-top:12px"><button class="sec" type="button" onclick="loadHw()">重新检测硬件</button><button class="sec" type="button" onclick="tab('settings', document.querySelector('#nav [data-page=settings]'))">模型目录</button></div>
+<div class="muted small" id="gpu-status">显卡状态：未检测</div>
+</div>
+</div>
+</div>
+<div class="sec-head"><h2>为这台电脑推荐</h2><button class="sec" type="button" onclick="tab('cat', document.querySelector('#nav [data-page=cat]'))">全部模型</button></div>
+<div id="recmodels"><p class="muted">正在准备推荐目录…</p></div>
+</div>
+
+<div id="cat" class="tab">
+<div class="sec-head"><h2>模型</h2><button type="button" onclick="importPrompt()">导入本地 GGUF</button></div>
+<p class="muted">推荐目录是公开的 GGUF 仓库，介绍是 OpenLoc 自己写的。量化下拉是你打算下载的规格；真正的文件要到仓库里对上名字才会下。</p>
 <div class="subtabs">
-<button id="sub-rec" class="on" onclick="catTab('rec',this)">推荐模型</button>
-<button id="sub-inst" onclick="catTab('inst',this)">已安装</button>
-<button id="sub-img" onclick="catTab('img',this)">画图 / 视频模型</button>
-<button id="sub-search" onclick="catTab('search',this)">搜索 HuggingFace</button>
+<button id="sub-rec" class="on" type="button" onclick="catTab('rec',this)">推荐模型</button>
+<button id="sub-inst" type="button" onclick="catTab('inst',this)">已安装</button>
+<button id="sub-img" type="button" onclick="catTab('img',this)">画图 / 视频模型</button>
+<button id="sub-search" type="button" onclick="catTab('search',this)">搜索 HuggingFace</button>
 </div>
 <div id="cat-rec">
 <div class="pills" id="catpills">
-<button class="on" onclick="setFilter('fit',this)">适合我的电脑</button><button onclick="setFilter('all',this)">全部</button><button onclick="setFilter('对话',this)">对话</button><button onclick="setFilter('编程',this)">编程</button><button onclick="setFilter('看图',this)">看图</button><button onclick="setFilter('推理',this)">推理</button>
+<button class="on" type="button" onclick="setFilter('fit',this)">适合我的电脑</button><button type="button" onclick="setFilter('all',this)">全部</button><button type="button" onclick="setFilter('对话',this)">对话</button><button type="button" onclick="setFilter('编程',this)">编程</button><button type="button" onclick="setFilter('看图',this)">看图</button><button type="button" onclick="setFilter('推理',this)">推理</button>
 </div>
-<button onclick="loadCatalog()">加载目录</button><div id="catalog"></div><div id="catfiles"></div>
+<p class="muted small" id="fit-note" hidden></p>
+<div id="catalog"></div><div id="catfiles"></div>
 </div>
-<div id="cat-inst" style="display:none"><button onclick="loadInstalled()">刷新已安装</button><div id="installed"></div>
-<div class="mcard"><b>已经有模型文件？</b><p class="muted">选择 .gguf 文件导入，程序会复制到 data/models。分卷文件选第一卷即可；同目录的 mmproj 会自动识别为看图组件。</p>
-<label>模型完整路径 <input id="importpath" placeholder="例如 C:\Models\qwen.gguf"></label><button onclick="importModel()">选择文件并导入</button><div id="importmsg" class="muted"></div></div>
+<div id="cat-inst" style="display:none">
+<div class="row"><button class="sec" type="button" onclick="loadInstalled()">刷新已安装</button></div>
+<div id="installed"><p class="muted">还没有读取本机已安装模型。</p></div>
+<div class="dashed">
+<b>已经有模型文件？</b>
+<p class="muted">选择 .gguf / .safetensors / .ckpt 导入到 data/models。分卷文件选第一卷即可；同目录的 mmproj 会当作看图组件。浏览器往往只给文件名、不给完整路径，那种情况不会假装已经导入。</p>
+<div class="row"><button class="sec" type="button" onclick="document.getElementById('importfile').click()">选择文件</button><button type="button" onclick="importModel()">按路径导入</button></div>
+<label>模型完整路径 <input id="importpath" placeholder="例如 C:\Models\qwen.gguf"></label>
+<div id="importmsg" class="muted"></div>
+<input id="importfile" type="file" accept=".gguf,.safetensors,.ckpt">
 </div>
-<div id="cat-img" style="display:none"><p class="muted">每个画图 / 视频模型包含主体、文本编码器和 VAE，一键全部下载。大小以官方仓库为准，别只看名字。已经在别处下好了画图 / 视频模型文件？点右上角“导入本地 GGUF”。</p><div id="imgmodels"></div></div>
+</div>
+<div id="cat-img" style="display:none">
+<p class="muted">每个画图 / 视频模型包含主体、文本编码器和 VAE，点下载会按你选的量化去找整套文件（桌面版才会真的拉）。体积写的是约数，以官方仓库为准。已经在别处下好了？导入本地文件。</p>
+<div class="row"><button class="sec" type="button" onclick="importPrompt()">导入本地文件</button></div>
+<h3>画图模型</h3>
+<div id="imgmodels"></div>
+</div>
 <div id="cat-search" style="display:none">
-<div class="row"><input id="hfq" placeholder="搜索 HuggingFace 上的 GGUF 模型…" style="flex:1;margin:0"><button onclick="searchHf()">搜索</button></div>
-<p class="muted" style="text-align:center">输入模型名字搜索 HuggingFace 上的 GGUF 模型，例如 qwen3.8、gemma-4、glm</p>
-<div id="hfres"></div></div>
+<div class="searchrow"><input id="hfq" placeholder="搜索 HuggingFace 上的 GGUF 模型…"><button type="button" onclick="searchHf()">搜索</button></div>
+<p class="search-empty" id="hfempty">输入模型名字搜索 HuggingFace 上的 GGUF 模型，例如 qwen3.8、gemma-4、glm</p>
+<div id="hfres"></div>
+</div>
 </div>
 
 <div id="md" class="tab">
-<div class="row" style="justify-content:space-between"><h2>运行</h2><span class="muted" id="run-state">准备运行</span></div>
 <div class="card" id="engine-card">
 <h3>装 / 启引擎</h3>
-<p class="muted" id="run-engine-info">正在查看本机引擎…</p>
+<p class="muted" id="run-engine-info">安装和启动都在这一页。网页预览不会下载或启动引擎。</p>
 <div class="row">
 <button type="button" onclick="dlLlama()">安装聊天引擎</button>
 <button type="button" class="sec" onclick="dlSd()">安装画图 / 视频引擎</button>
 </div>
-<p class="muted small">这是 OpenLoc 的引擎能力：聊天用 llama.cpp，画图和扩散视频用 stable-diffusion.cpp。两份源码都在 GitHub，许可证是 MIT；模型权重在 Hugging Face。在这一页安装并启动。</p>
+<p class="muted small">聊天用 llama.cpp，画图和扩散视频用 stable-diffusion.cpp。两份都是 GitHub 上的公开项目，许可证是 MIT。网页预览点安装只会说明做不到。</p>
 <div id="run-dlmsg" class="muted"></div>
 </div>
-<div id="md-empty" class="empty"><p id="md-empty-text">还没选中要运行的模型。</p><button type="button" onclick="tab('cat')">去模型页下载</button></div>
-<div id="md-body" hidden>
-<div class="row"><select id="runmodel" style="flex:1;margin:0"></select><button type="button" class="sec" onclick="tab('cat')">管理模型</button></div>
-<div id="startcard" class="card" style="display:none"><b id="start-title">正在启动…</b><div class="row" style="justify-content:space-between"><span class="muted" id="start-sub"></span><b id="start-pct"></b></div><div class="bar"><div id="start-bar" class="fill teal"></div></div><div class="muted small" id="start-log"></div></div>
-<div class="grid2">
-<div class="card"><h3>自动分层规划</h3><p class="muted" id="plan-desc">选一个已下载模型后，这里会算它放进显存还是内存。</p>
-<div class="hwrows">
-<div class="hwrow"><span>显卡</span><div><b id="plan-vram"></b><div class="bar"><div id="plan-vram-bar" class="fill teal"></div></div><div class="muted small" id="plan-vram-sub"></div></div></div>
-<div class="hwrow"><span>内存</span><div><b id="plan-mem"></b><div class="bar"><div id="plan-mem-bar" class="fill indigo"></div></div><div class="muted small">不需要</div></div></div>
-<div class="hwrow"><span>硬盘</span><div><b>按需读取</b><div class="bar"><div class="fill slate" style="width:4%"></div></div><div class="muted small">不需要</div></div></div>
+<div class="run-top">
+<div>
+<div class="muted small" id="run-state">准备运行</div>
+<select id="runmodel" aria-label="要运行的模型"><option value="">还没有选择已安装模型</option></select>
 </div>
-<details><summary>高级：启动参数</summary><p class="muted">上下文在右边选；思考模式在右边开。其他启动参数（如线程数）目前用默认值，下一版再加。</p></details>
-<details><summary>运行日志</summary><pre id="runlog">还没启动模型。</pre></details>
+<button class="sec" type="button" onclick="tab('cat', document.querySelector('#nav [data-page=cat]'))">管理模型</button>
+</div>
+<div id="startcard" class="card" style="display:none"><b id="start-title">正在启动…</b><div class="row" style="justify-content:space-between"><span class="muted" id="start-sub"></span><b id="start-pct"></b></div><div class="bar"><div id="start-bar" class="fill teal"></div></div><div class="muted small" id="start-log"></div></div>
+<div class="run-grid">
+<div class="card">
+<h3>自动分层规划</h3>
+<p class="muted" id="plan-desc">选一个已下载模型后，这里会算它放进显存还是内存。</p>
+<div class="plan-block gpu"><div class="barlabel"><b id="plan-vram">显卡 · 未检测</b><span id="plan-vram-sub">未检测</span></div><div class="bar"><div id="plan-vram-bar" class="fill teal" style="width:0"></div></div></div>
+<div class="plan-block ram"><div class="barlabel"><b id="plan-mem">内存 · 未检测</b><span id="plan-mem-sub">未检测</span></div><div class="bar"><div id="plan-mem-bar" class="fill indigo" style="width:0"></div></div></div>
+<div class="plan-block disk"><div class="barlabel"><b>硬盘 · 按需读取</b><span id="plan-disk-sub">未检测</span></div><div class="bar"><div class="fill slate" style="width:0"></div></div></div>
+<details><summary>高级：启动参数</summary><p class="muted">上下文和思考模式在右边。线程数等其它参数仍用引擎默认值，这里不假装已经调过。</p></details>
+<details open><summary>运行日志</summary><pre id="runlog">还没启动模型。</pre></details>
 </div>
 <div class="card">
 <h3>上下文长度 · 当前 <span id="ctx-now">自动</span></h3>
-<div class="pills" id="ctxpills"><button class="on" onclick="setCtx('auto',this)">自动</button><button onclick="setCtx(8192,this)">8K</button><button onclick="setCtx(16384,this)">16K</button><button onclick="setCtx(32768,this)">32K</button><button onclick="setCtx(65536,this)">64K</button></div>
+<div class="pills" id="ctxpills"><button class="on" type="button" onclick="setCtx('auto',this)">自动</button><button type="button" onclick="setCtx(8192,this)">8K</button><button type="button" onclick="setCtx(16384,this)">16K</button><button type="button" onclick="setCtx(32768,this)">32K</button><button type="button" onclick="setCtx(65536,this)">64K</button></div>
 <p class="muted small">越长越能读长文档，但更占显存。“自动”会选不降速的最大值。</p>
-<label><input type="checkbox" id="thinkmode" checked style="width:auto;display:inline"> 思考模式（先想再答，仅支持思考的模型有效）</label>
-<label><input type="checkbox" id="lanmode" disabled style="width:auto;display:inline"> 局域网访问（让手机、其他电脑也能调用这里的 API）</label>
-<p class="muted small">局域网访问目前没开：聊天服务只限本机 127.0.0.1，不对外网开放。</p>
-<div class="row" style="justify-content:space-between"><div><div class="muted small">预计速度</div><b id="est-speed">—</b></div><div><div class="muted small">首次加载</div><b>约几秒到一分钟</b></div></div>
-<button id="startBtn" onclick="startRunModel()">启动模型</button>
-<button class="sec" id="stopBtn" onclick="stopRunModel()" style="display:none">停止模型</button>
-<button class="sec" id="chatBtn" onclick="tab('chat')" style="display:none">开始对话</button>
+<div class="switch-row">
+<span><b>思考模式</b><div class="muted small">先想再答，只有支持思考的模型有效</div></span>
+<button type="button" class="net-switch" id="thinkBtn" role="switch" aria-checked="true" onclick="toggleThink()"><span class="net-track" aria-hidden="true"><span class="net-knob"></span></span><span id="thinkLab">开</span></button>
+</div>
+<input class="ghost-check" type="checkbox" id="thinkmode" checked>
+<div class="switch-row">
+<span><b>局域网访问</b><div class="muted small">想让手机或别的电脑调用这里的 API。当前版本启动时仍只绑定 127.0.0.1</div></span>
+<button type="button" class="net-switch" id="lanBtn" role="switch" aria-checked="false" onclick="toggleLan()"><span class="net-track" aria-hidden="true"><span class="net-knob"></span></span><span id="lanLab">关</span></button>
+</div>
+<input class="ghost-check" type="checkbox" id="lanmode">
+<div class="statrow">
+<div class="stat"><div class="k">预计速度</div><div class="v" id="est-speed">待实测</div></div>
+<div class="stat"><div class="k">首次加载</div><div class="v" id="est-load">约几秒到一分钟</div></div>
+</div>
+<button id="startBtn" type="button" onclick="startRunModel()">启动模型</button>
+<button class="sec" id="stopBtn" type="button" onclick="stopRunModel()" style="display:none">停止模型</button>
+<button class="sec" id="chatBtn" type="button" onclick="tab('chat', document.querySelector('#nav [data-page=chat]'))" style="display:none">开始对话</button>
 <div id="runmsg" class="muted"></div>
 </div>
 </div>
 <div class="card" id="runcard" style="display:none"><b id="run-title">运行中</b><p class="muted" id="run-sub">实际按空闲显存自动分配</p>
-<div class="row" style="justify-content:space-between"><div><div class="muted small">生成速度</div><b id="run-speed">—</b></div><div><div class="muted small">显存</div><b id="run-vram"></b></div><div><div class="muted small">内存</div><b id="run-mem"></b></div><div><code id="run-api"></code><button type="button" class="sec" onclick="copyApi()">复制</button></div></div>
-</div>
+<div class="row" style="justify-content:space-between"><div><div class="muted small">生成速度</div><b id="run-speed">—</b></div><div><div class="muted small">显存</div><b id="run-vram"></b></div><div><div class="muted small">内存</div><b id="run-mem"></b></div><div><code id="run-api"></code><button class="sec" type="button" onclick="copyApi()">复制</button></div></div>
 </div>
 </div>
 
 <div id="chat" class="tab card">
-<div id="chat-empty" class="empty"><p id="chat-empty-text">聊天服务还没启动。</p><button type="button" onclick="tab('md')">去运行页启动</button></div>
 <div class="chatwrap">
-<div class="chatlist"><button onclick="newChat()">+ 新对话</button><div class="mcard" id="chat-history"><b>你好</b><div class="muted small">当前对话</div></div></div>
+<div class="chatlist"><button type="button" onclick="newChat()">+ 新对话</button><div class="mcard" id="chat-history"><b>你好</b><div class="muted small">当前对话</div></div></div>
 <div class="chatmain">
-<div class="row" style="justify-content:space-between"><select id="chatmodel" style="flex:1;margin:0"></select><span class="muted">思考：开</span><button class="sec" id="netBtn" onclick="toggleNet()">本机运行 · 不联网</button></div>
-<div id="chatbox" class="chatbox"></div>
-<label>你说 <textarea id="chatin" rows="3" placeholder="问点什么，或者说「画一只…」（Enter 发送，Shift+Enter 换行）"></textarea></label>
-<div class="row"><button type="button" onclick="sendChat()">发送</button><span class="muted small">Enter 发送，Shift+Enter 换行。画图、做视频不用启动聊天服务。</span></div>
-<div class="row"><button class="sec" onclick="alert('附件：本地模型目前只支持文字，图片附件暂不支持直接发给它。')">附件</button><button class="sec" onclick="tab('agent')">工具</button><button class="sec" onclick="tab('agent')">操作电脑</button><button class="sec" onclick="tab('img')">画图</button><button class="sec" onclick="tab('vid')">视频</button><button class="sec" onclick="tab('settings')">对话设置</button><button class="sec" onclick="takeShot()">截屏</button><button class="sec" id="netBtn2" onclick="toggleNet()">联网</button></div>
-<label>上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384" selected>16K</option><option value="32768">32K</option></select></label>
+<div class="chat-head">
+<div class="model-pill">
+<span class="dot" id="modelDot" title="本地模型未启动"></span>
+<select id="chatmodel" aria-label="本地模型"><option value="">本地模型：还没有启动</option></select>
+</div>
+<div class="chat-head-right">
+<span class="think-flag">思考：开</span>
+<button type="button" id="netBtn" class="net-switch" data-net-switch="1" role="switch" aria-checked="false" onclick="toggleNet()" title="切换联网。默认不联网。打开后只记录偏好；检索没接上时不会编造搜索结果。">
+<span class="net-track" aria-hidden="true"><span class="net-knob"></span></span>
+<span id="netLabel" class="js-net-label">本机运行 · 不联网</span>
+</button>
+</div>
+</div>
+<div id="chatbox" class="chatbox">
+<div id="chat-empty" class="chat-empty">
+<b>有什么可以帮你？</b>
+<p>模型完全在你电脑上运行，对话内容不会上传。</p>
+<p>本地模型还没有启动。先在「运行」页启动一个模型，再在这里发消息。</p>
+<button type="button" class="sec" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页启动</button>
+</div>
+</div>
+<div class="composer">
+<div id="chat-attach" class="attach-strip" hidden></div>
+<textarea id="chatin" rows="3" placeholder="问点什么，或者说「画一只…」（Enter 发送，Shift+Enter 换行）"></textarea>
+<div class="composer-hint">先在「运行」页启动一个模型；画图、做视频不用启动聊天服务。</div>
+<div class="composer-bar">
+<div class="composer-tools">
+<button type="button" class="toolbtn" onclick="pickAttach()" title="添加附件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5l6.2-6.2a3 3 0 014.2 4.2l-7.4 7.4a4.5 4.5 0 01-6.4-6.4l6.8-6.8"/></svg>附件</button>
+<button type="button" class="toolbtn" id="shotBtn" onclick="captureForChat()" title="截图并放入当前对话。网页预览不可截屏，桌面版可用。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
+<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
+<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="操作电脑"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>操作电脑</button>
+<button type="button" class="toolbtn" onclick="tab('img', document.querySelector('#nav [data-page=img]'))" title="画图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l5-4 3 3 3-2 3 3"/></svg>画图</button>
+<button type="button" class="toolbtn" onclick="tab('vid', document.querySelector('#nav [data-page=vid]'))" title="视频"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9.2l5 2.8-5 2.8z"/></svg>视频</button>
+<button type="button" class="toolbtn" onclick="tab('settings', document.querySelector('#nav [data-page=settings]'))" title="对话设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h16"/><circle cx="16" cy="12" r="2"/></svg>对话设置</button>
+</div>
+<button type="button" class="sendbtn" onclick="sendChat()" title="发送" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></svg></button>
+</div>
+<div id="composer-note" class="composer-note" role="status" aria-live="polite" hidden></div>
+<div class="composer-foot">
+<label class="ctx-line">上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384" selected>16K</option><option value="32768">32K</option></select></label>
+</div>
+</div>
+<input id="chatfile" type="file" multiple accept="image/*,.txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.gif">
 </div>
 </div>
 </div>
 
-<div id="agent" class="tab card"><h2>Agent：交代一句，它自己动手</h2>
-<div id="agent-empty" class="empty"><p>还没填写工作文件夹。</p><button type="button" onclick="focusAgentFolder()">填写工作文件夹</button></div>
-<p class="muted">安全边界：Agent 只能在你指定的工作文件夹里读写文件、跑命令，超出文件夹、含 ..、删除、格式化等一律拦截。不要把整个文档、桌面或系统盘交给它。Agent 要用聊天服务里的本地模型做计划，先在运行页启动服务；小模型做计划可能不稳定，大模型效果更好。</p>
-<label>工作文件夹（完整路径） <input id="afolder" placeholder="例如 C:\Work\agent-test"></label>
-<label>任务 <textarea id="atask" rows="3" placeholder="例如：在文件夹里新建 hello.txt，内容是 Hello Local AI，然后列出文件夹"></textarea></label>
-<div><button class="sec" onclick="fillTask('做一个番茄钟网页，打开 index.html 就能用')">做一个番茄钟网页</button> <button class="sec" onclick="fillTask('写个 Python 脚本，把这个文件夹里的图片批量压缩到 1080p')">批量压缩图片</button> <button class="sec" onclick="fillTask('读一下这个项目，写一份 README.md 说明怎么运行')">写 README</button> <button class="sec" onclick="fillTask('整理这个文件夹：按文件类型分到不同文件夹')">整理文件夹</button></div>
-<button onclick="runAgent()">开始 Agent</button><pre id="asteps"></pre></div>
+<div id="agent" class="tab">
+<div class="agent-wrap">
+<div class="agent-side">
+<button type="button" onclick="newAgentTask()">+ 新任务</button>
+<div id="agent-tasks"><div class="muted small">还没有任务</div></div>
+</div>
+<div class="agent-main">
+<div class="chat-head">
+<div class="model-pill"><span class="dot" id="agentDot" title="本地模型未启动"></span><span id="agentModelLabel">本地模型：还没有启动</span></div>
+<div class="folder-row">
+<span class="muted small">工作文件夹</span>
+<input id="afolder" placeholder="例如 C:\Work\agent-test" aria-label="工作文件夹">
+<button class="sec" type="button" onclick="pickAgentFolder()">选择</button>
+</div>
+</div>
+<div class="chat-empty agent-hero">
+<b>交给 Agent 一个任务</b>
+<p>它只在你填的工作文件夹里自己规划、写文件、跑命令。超出文件夹、带 ..、删除和格式化会被拦住。</p>
+<button type="button" onclick="pickAgentFolder()">选择工作文件夹</button>
+<div class="presets">
+<button class="sec" type="button" onclick="fillTask('做一个番茄钟网页，打开 index.html 就能用')">做一个番茄钟网页，打开 index.html 就能用</button>
+<button class="sec" type="button" onclick="fillTask('写个 Python 脚本，把这个文件夹里的图片批量压缩到 1080p')">写个 Python 脚本，把这个文件夹里的图片批量压缩到 1080p</button>
+<button class="sec" type="button" onclick="fillTask('读一下这个项目，写一份 README.md 说明怎么运行')">读一下这个项目，写一份 README.md 说明怎么运行</button>
+<button class="sec" type="button" onclick="fillTask('整理这个文件夹：按文件类型分到不同文件夹')">整理这个文件夹：按文件类型分到不同文件夹</button>
+</div>
+<p class="muted small">长任务更适合大一些的本地模型。OpenLoc 不会把任务发给别的云端模型。</p>
+</div>
+<pre id="asteps"></pre>
+<div class="composer">
+<div id="agent-attach" class="attach-strip" hidden></div>
+<textarea id="atask" rows="3" placeholder="先选一个工作文件夹"></textarea>
+<div class="composer-hint">文件夹里的读写在桌面版会真的执行；危险命令会被拦住。网页预览不会真的跑 Agent。</div>
+<div class="composer-bar">
+<div class="composer-tools">
+<button type="button" class="toolbtn" onclick="captureForAgent()" title="截图到这个任务。网页预览不可截屏。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
+<button type="button" class="net-switch" data-net-switch="1" role="switch" aria-checked="false" onclick="toggleNet()" title="与对话页同一个联网开关，默认不联网。">
+<span class="net-track" aria-hidden="true"><span class="net-knob"></span></span>
+<span class="js-net-label">本机运行 · 不联网</span>
+</button>
+</div>
+<button type="button" class="sendbtn" onclick="runAgent()" title="开始任务" aria-label="开始任务"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></svg></button>
+</div>
+<div id="agent-note" class="composer-note" role="status" hidden></div>
+</div>
+</div>
+</div>
+</div>
 
 <div id="img" class="tab card"><h2>画图</h2>
-<div id="img-empty" class="empty"><p id="img-empty-text">还没装画图引擎或画图模型。</p><button type="button" id="img-empty-btn" onclick="tab('md')">去运行页装引擎</button></div>
+<div id="img-empty" class="empty">
+<p id="img-empty-text">还没装画图引擎或画图模型。缺引擎去运行页，缺模型去模型页。</p>
+<div class="row"><button type="button" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页装引擎</button><button type="button" class="sec" onclick="tab('cat', document.querySelector('#nav [data-page=cat]')); catTab('img', document.getElementById('sub-img'))">去模型页下载</button></div>
+</div>
 <p class="muted">没有 GPU 会很慢。出图用的是本机画图引擎。</p>
 <label>模型 <select id="imgmodel"></select></label>
 <label>提示词 <textarea id="imgprompt" rows="3" placeholder="例如：a cat sitting by the window, soft light"></textarea></label>
 <label>步数 <input id="imgsteps" type="number" value="20"></label>
-<button onclick="genImg()">生成图片</button><div id="imgmsg" class="muted"></div></div>
+<button type="button" onclick="genImg()">生成图片</button><div id="imgmsg" class="muted"></div></div>
 
 <div id="vid" class="tab card"><h2>视频</h2>
-<div id="vid-empty" class="empty"><p id="vid-empty-text">还没装视频引擎或视频模型。</p><button type="button" id="vid-empty-btn" onclick="tab('md')">去运行页装引擎</button></div>
+<div id="vid-empty" class="empty">
+<p id="vid-empty-text">还没装视频引擎或视频模型。缺引擎去运行页，缺模型去模型页。</p>
+<div class="row"><button type="button" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页装引擎</button><button type="button" class="sec" onclick="tab('cat', document.querySelector('#nav [data-page=cat]')); catTab('img', document.getElementById('sub-img'))">去模型页下载</button></div>
+</div>
 <p><b>方式一：动效视频（ffmpeg）</b>——把一张图做成推近动效，这是动效，不是扩散生成，CPU 就能跑。</p>
 <label>图片完整路径 <input id="vidimg" placeholder="例如 C:\...\outputs\img_xxx.png"></label>
-<button onclick="genMotion()">生成动效视频</button>
+<button type="button" onclick="genMotion()">生成动效视频</button>
 <p><b>方式二：扩散视频（Wan）</b>——调用 sd-cli 的 vid_gen，需要 Wan 视频模型和足够显存，没有会直接报错，不会给你假视频。</p>
 <label>视频模型 <select id="vidmodel"></select></label>
 <label>提示词 <textarea id="vidprompt" rows="2"></textarea></label>
-<button onclick="genVid()">生成扩散视频</button><div id="vidmsg" class="muted"></div></div>
+<button type="button" onclick="genVid()">生成扩散视频</button><div id="vidmsg" class="muted"></div></div>
 
-<div id="settings" class="tab card"><h2>设置</h2>
-<div class="mcard"><b>主题风格</b><p class="muted">主题存在本机，下次打开 OpenLoc 还是你选的那个。深色是海军蓝底、抬升卡片；浅色是灰白底。主色是蓝。侧栏底部的图标也可以切换：深色是太阳，浅色是月亮。</p><button id="themeBtn2" class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="切换到深色"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 0 0 11.5 11.5z"/></svg></button></div>
-<div class="mcard"><b>模型存放</b><p class="muted">模型默认存在程序旁的 data/models/。已下载的模型不会自动搬家。</p><div class="row"><button onclick="openModelsFolder()">打开模型文件夹</button><button class="sec" onclick="openDataFolder()">打开数据目录</button></div></div>
-<div class="mcard"><b>界面语言</b><select id="langSel" onchange="saveLang(this.value)"><option value="system">跟随系统（简体中文）</option><option value="zh">简体中文</option><option value="en">English</option></select><p class="muted" id="langmsg">界面目前只有简体中文，选 English 暂不翻译，下一版再做英文界面。</p></div>
-<div class="mcard"><b>显卡</b><p class="muted" id="gpu-info">检测中…</p><div class="row"><button onclick="loadHw()">重新检测</button><button class="sec" onclick="alert('手动指定显卡：目前只支持自动检测到的 NVIDIA 显卡，检测不到时请在运行页用 CPU 模式。')">手动指定</button></div></div>
-<div class="mcard"><b>推理引擎</b><p class="muted" id="engine-info">安装和启动在「运行」页。聊天引擎来自 llama.cpp，画图和视频引擎来自 stable-diffusion.cpp，源码在 GitHub，许可证是 MIT。</p><button type="button" class="sec" onclick="tab('md')">去运行页安装并启动</button>
-<label>聊天引擎下载地址 <input id="llamaurl" value="https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip"></label>
-<button onclick="dl('engine',document.getElementById('llamaurl').value,'llama.zip')">下载聊天引擎</button>
-<label>画图引擎下载地址 <input id="sdurl" value="https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1043/sd-master-1043-bin-win-cuda12-x64.zip"></label>
-<button onclick="dl('engine',document.getElementById('sdurl').value,'sd.zip')">下载画图引擎（有 NVIDIA 显卡用 CUDA 版，否则换 CPU 版）</button>
-<div id="dlmsg" class="muted"></div></div>
-<div class="mcard"><b>本地 API 端口</b><label>端口 <input id="apiport" type="number" value="8080"></label><button onclick="savePort()">保存端口</button><p class="muted" id="portmsg">聊天服务默认跑在 127.0.0.1:8080，只限本机访问，不对外网开放。改完端口，下次启动聊天服务时生效。</p></div>
-<div class="mcard"><b>授权控制</b><p class="muted">OpenLoc 只能控制下面这些它自己的后台程序，不碰你电脑上的其他程序。哪项没勾，OpenLoc 就不会做那件事。</p>
-<label><input type="checkbox" id="auth-chat" checked style="width:auto;display:inline" onchange="saveAuth()"> 允许启动 / 停止聊天服务（llama-server）</label>
-<label><input type="checkbox" id="auth-img" checked style="width:auto;display:inline" onchange="saveAuth()"> 允许启动画图 / 视频引擎（sd-cli）</label>
-<label><input type="checkbox" id="auth-agent" checked style="width:auto;display:inline" onchange="saveAuth()"> 允许 Agent 在工作文件夹里跑命令</label>
-<label><input type="checkbox" id="auth-tray" checked style="width:auto;display:inline" onchange="saveAuth()"> 允许后台常驻托盘（关了，点窗口右上角 X 就直接退出程序）</label>
-<p class="muted small" id="authmsg">授权存在本机，下次打开 OpenLoc 还在。</p>
-<h4>后台程序</h4><div class="row"><button onclick="loadBackground()">刷新后台程序</button></div><div id="bglist"><p class="muted">点刷新，看 OpenLoc 现在在后台跑着哪些程序。</p></div></div>
-<div class="mcard" id="about-card"><b>关于</b>
-<p>OpenLoc 把引擎当作自己的能力来安装和启动：聊天是 llama.cpp 的 llama-server，画图和扩散视频是 stable-diffusion.cpp 的 sd-cli。两份都是 GitHub 上的公开项目，许可证为 MIT。模型权重在 Hugging Face，不随安装包附带。</p>
-<p class="muted small">聊天引擎 https://github.com/ggml-org/llama.cpp （MIT）</p>
-<p class="muted small">画图 / 视频引擎 https://github.com/leejet/stable-diffusion.cpp （MIT）</p>
-<p class="muted small">对话模型 https://huggingface.co/unsloth</p>
-<p class="muted small">Wan 视频模型 https://github.com/Wan-Video/Wan2.2 ，权重在 Hugging Face 的 Wan-AI</p>
-<p class="muted small">致谢上述开源项目。</p>
+<div id="settings" class="tab">
+<h2>设置</h2>
+<div class="setcard"><h3>模型存放</h3>
+<label>模型目录 <input id="modeldir" value="data/models" readonly></label>
+<p class="muted">默认在程序旁边的 data/models。改目录还没接上，已下载的模型也不会自动搬家。选择按钮在桌面版会打开这个文件夹，网页预览打不开系统窗口。</p>
+<div class="row"><button class="sec" type="button" onclick="chooseModelDir()">选择…</button><button class="sec" type="button" onclick="openModelsFolder()">打开模型文件夹</button><button class="sec" type="button" onclick="openDataFolder()">打开数据目录</button></div>
 </div>
-<div class="mcard" id="about-accel"><b>关于加速</b><p class="muted">OpenLoc 不做付费加速通道，所有引擎和模型都直接从 GitHub / HuggingFace 免费下载，下载速度取决于你的网络。</p></div>
+<div class="setcard"><h3>界面语言</h3>
+<div class="row lang-row"><select id="langSel" onchange="saveLang(this.value)"><option value="system">跟随系统（简体中文）</option><option value="zh">简体中文</option><option value="en">English</option></select><p class="muted" id="langmsg">界面目前只有简体中文。选 English 不会假装已经翻译。</p></div>
+</div>
+<div class="setcard"><h3>显卡</h3>
+<p id="gpu-info">未检测。点重新检测；网页预览读不到你的显卡。</p>
+<div class="row"><button class="sec" type="button" onclick="loadHw()">重新检测</button></div>
+<details><summary>检测不到显卡，或者显存不对？</summary><p class="muted">目前只认自动检测到的 NVIDIA 显卡。检测不到时，运行页走 CPU / 内存，不会假装有一块显卡。</p></details>
+</div>
+<div class="setcard"><h3>推理引擎</h3>
+<p id="engine-info">安装和启动在运行页。聊天引擎来自 llama.cpp，画图和视频引擎来自 stable-diffusion.cpp，源码在 GitHub，许可证是 MIT。</p>
+<div class="row"><button class="sec" type="button" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页安装并启动</button></div>
+<label>聊天引擎下载地址 <input id="llamaurl" value="https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip"></label>
+<button type="button" onclick="dl('engine',document.getElementById('llamaurl').value,'llama.zip')">下载聊天引擎</button>
+<label>画图引擎下载地址 <input id="sdurl" value="https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1043/sd-master-1043-bin-win-cuda12-x64.zip"></label>
+<button type="button" onclick="dl('engine',document.getElementById('sdurl').value,'sd.zip')">下载画图引擎</button>
+<p class="muted small">有 NVIDIA 显卡用 CUDA 版，否则把地址换成 CPU 版再下。网页预览点下载只会说明做不到。</p>
+<div id="dlmsg" class="muted"></div>
+<h3>本地 API 端口</h3>
+<label>端口 <input id="apiport" type="number" value="8080"></label>
+<button type="button" onclick="savePort()">保存端口</button>
+<p class="muted" id="portmsg">聊天服务默认跑在 127.0.0.1:8080，只限本机。被占用时请改一个空闲端口，下次启动生效。不会自动对外网开放。</p>
+</div>
+<div class="setcard"><h3>关于 OpenLoc</h3>
+<p>OpenLoc 是跑在你电脑上的本地创作工坊。模型、对话和 Agent 的文件都留在本机。聊天引擎是 llama.cpp，画图和扩散视频是 stable-diffusion.cpp，许可证都是 MIT。模型权重在 Hugging Face，不随安装包附带。</p>
+<div class="row"><button class="sec" type="button" onclick="checkUpdate()">检查更新</button><button id="themeBtn2" class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="切换到深色"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 0 0 11.5 11.5z"/></svg></button></div>
+<p class="muted" id="aboutmsg">这一版不连接更新服务器。要看有没有新版本，请到项目仓库。浅色是灰白底，深色是海军蓝底，主色是蓝。</p>
+</div>
+<div class="setcard"><h3>授权控制</h3>
+<p class="muted">OpenLoc 只能控制下面这些它自己的后台程序，不碰你电脑上的其他程序。哪项没勾，就不会做那件事。</p>
+<label><input type="checkbox" id="auth-chat" checked onchange="saveAuth()"> 允许启动 / 停止聊天服务（llama-server）</label>
+<label><input type="checkbox" id="auth-img" checked onchange="saveAuth()"> 允许启动画图 / 视频引擎（sd-cli）</label>
+<label><input type="checkbox" id="auth-agent" checked onchange="saveAuth()"> 允许 Agent 在工作文件夹里跑命令</label>
+<label><input type="checkbox" id="auth-tray" checked onchange="saveAuth()"> 允许后台常驻托盘（关了，点窗口右上角 X 就直接退出程序）</label>
+<p class="muted small" id="authmsg">授权存在本机，下次打开 OpenLoc 还在。</p>
+<h4>后台程序</h4><div class="row"><button type="button" onclick="loadBackground()">刷新后台程序</button></div><div id="bglist"><p class="muted">点刷新，看 OpenLoc 现在在后台跑着哪些程序。网页预览没有这些进程。</p></div></div>
+<div class="setcard"><h3>关于加速</h3>
+<p><b>不做付费加速。</b> OpenLoc 没有付费加速通道。引擎和模型都从 GitHub / Hugging Face 免费下载，速度取决于你自己的网络。</p>
+</div>
 </div>
 
 </main>
