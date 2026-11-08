@@ -1,6 +1,8 @@
 // Tauri 2 withGlobalTauri: use the injected global API, no bundler needed.
 const invoke = (...args) => window.__TAURI__.core.invoke(...args);
 let catalogCache = [];
+let shownModels = [];
+let hwSnapshot = null;
 let catFilter = 'fit';
 let runCtx = 'auto';
 let webOn = false;
@@ -58,11 +60,35 @@ const LOCAL_CATALOG = [
 function localModels() {
   return LOCAL_CATALOG.map(([name, repo, params, desc, cat]) => ({ name, repo, params, desc, cat, fit: "待检测" }));
 }
-function estGb(params) {
-  const act = String(params).match(/约\s*([\d.]+)\s*B\s*激活/);
-  if (act) return parseFloat(act[1]) * 0.6 + 2;
-  const m = String(params).match(/([\d.]+)\s*B/);
-  return (m ? parseFloat(m[1]) : 8) * 0.6 + 2;
+function hardwareView() {
+  if (hwSnapshot) return hwSnapshot;
+  return OpenLocRecommend.emptyHardware(!hasTauri());
+}
+function hardwareFrom(h) {
+  return {
+    detected: true,
+    preview: false,
+    gpu: (h && h.gpu) || "",
+    vramGb: Number(h && h.gpu_vram_gb) || 0,
+    memoryTotalGb: Number(h && h.memory_total_gb) || 0,
+    memoryAvailGb: Number(h && h.memory_gb) || 0,
+    cpuCount: Number(h && h.cpu_count) || 0,
+  };
+}
+function rememberModels(list) {
+  (list || []).forEach((m) => {
+    const raw = { name: m.name, repo: m.repo, params: m.params, desc: m.desc, cat: m.cat };
+    const i = shownModels.findIndex((x) => x.repo === raw.repo);
+    if (i >= 0) shownModels[i] = raw;
+    else shownModels.push(raw);
+  });
+}
+function withView(models) {
+  const hw = hardwareView();
+  return (models || []).map((m) => {
+    const view = OpenLocRecommend.assess(m, hw, "Q4_K_M");
+    return Object.assign({}, m, { fit: view.fit, view: view });
+  });
 }
 function renderAttachments() {
   const el = document.getElementById("chat-attach");
@@ -200,9 +226,10 @@ window.loadHw = async function() {
   let h;
   try { h = await invoke("get_hardware"); }
   catch (e) {
+    hwSnapshot = OpenLocRecommend.emptyHardware(!hasTauri());
     markStep(false);
     paintLayer(false, "未检测", "未检测", "兜底");
-    const gs = document.getElementById("gpu-status"); if (gs) gs.textContent = "显卡状态：网页预览未检测";
+    const gs = document.getElementById("gpu-status"); if (gs) gs.textContent = hasTauri() ? "显卡状态：未检测" : "显卡状态：网页预览未检测";
     ["hw-gpu","hw-cpu","hw-mem","hw-disk"].forEach((id) => { const n = document.getElementById(id); if (n) n.textContent = "未检测"; });
     ["vram-bar","mem-bar","disk-bar"].forEach((id) => { const n = document.getElementById(id); if (n) n.style.width = "0"; });
     const gi = document.getElementById("gpu-info");
@@ -210,15 +237,18 @@ window.loadHw = async function() {
     const title = document.getElementById("rec-title");
     if (title) title.textContent = "还不知道这台电脑能流畅跑多大的模型";
     const desc = document.getElementById("rec-desc");
-    if (desc) desc.textContent = "网页预览没有显存数据。桌面版按显存判断：能放进显存才标流畅，放不进就分到内存，速度会变慢。";
+    if (desc) desc.textContent = hasTauri()
+      ? "这次没读到显存和内存。读到之后才会标流畅或能跑，并约估 tok/s。现在不编一个每秒 token。"
+      : "网页预览没有显存数据。桌面版按显存判断流畅还是能跑，并约估 tok/s。这里不会编一个每秒 token。";
     loadRecommended();
     return;
   }
+  hwSnapshot = hardwareFrom(h);
   const vram = h.gpu_vram_gb || 0;
   const smooth = vram >= 16 ? 14 : vram >= 8 ? 8 : vram >= 6 ? 7 : vram >= 4 ? 4 : 2;
   markStep(true);
   document.getElementById("rec-title").textContent = "流畅运行 " + smooth + "B 以内的模型";
-  document.getElementById("rec-desc").textContent = "推荐按显存算，不是按内存算：模型能放进显存才流畅，放不进显存只能分到内存，速度会变慢。标“流畅”的才能放进你的显存。";
+  document.getElementById("rec-desc").textContent = "整份权重能放进显存才标流畅，放不进就分到内存，标能跑或较慢。卡片上的 tok/s 按显卡或内存带宽估算，不是实测。";
   document.getElementById("vram-text").textContent = vram ? vram.toFixed(1) + " GB 显存" : "未检测到独立显存，走 CPU / 内存模式";
   document.getElementById("vram-bar").style.width = vram ? Math.min(100, vram / 16 * 100) + "%" : "8%";
   document.getElementById("mem-text").textContent = h.memory_total_gb.toFixed(0) + " GB，可用 " + h.memory_gb.toFixed(0) + " GB";
@@ -242,9 +272,10 @@ window.loadHw = async function() {
   loadRecommended();
 };
 function fitLabel(fit) {
-  if (!fit || fit === "待检测") return "待检测";
-  if (fit.startsWith("流畅")) return "流畅";
-  if (fit.startsWith("能跑")) return "能跑";
+  const s = String(fit || "");
+  if (!s || s.startsWith("待检测")) return "待检测";
+  if (s.startsWith("流畅")) return "流畅";
+  if (s.startsWith("能跑")) return "能跑";
   return "较慢";
 }
 function fitClass(fit) {
@@ -255,19 +286,53 @@ function fitClass(fit) {
   return " slow";
 }
 function cardHtml(m, feat) {
-  const quants = ["Q4_K_M（常用）", "Q5_K_M", "Q6_K", "Q8_0"];
-  return `<article class="mc${feat ? " feat-mc" : ""}"><div><div class="mtitle"><b>${escHtml(m.name)}</b>${m.cat === "看图" ? '<span class="tag">看图</span>' : ""}<span class="muted small">${escHtml(m.params)}</span></div><p class="mdesc">${escHtml(m.desc)}</p><div class="mmeta">${escHtml(m.cat)} · ${escHtml(m.repo)}</div></div><div class="right"><div class="qrow"><select class="qsel" aria-label="${escHtml(m.name)} 的量化">${quants.map((q) => `<option>${q}</option>`).join("")}</select><span class="pill-fit${fitClass(m.fit)}">${fitLabel(m.fit)}</span></div><div class="muted small">大小以仓库为准</div><button type="button" data-repo="${escHtml(m.repo)}" onclick="askDownload(this.dataset.repo, this)">下载</button></div></article>`;
+  const view = m.view || OpenLocRecommend.assess(m, hardwareView(), "Q4_K_M");
+  const quants = OpenLocRecommend.QUANTS;
+  return `<article class="mc${feat ? " feat-mc" : ""}" data-repo="${escHtml(m.repo)}"${feat ? ' data-hero="1"' : ""}><div class="mbody"><div class="mtitle"><b>${escHtml(m.name)}</b>${m.cat === "看图" ? '<span class="tag">看图</span>' : ""}</div><p class="mdesc">${escHtml(m.desc)}</p><p class="mmeta">${escHtml(view.arch)} · ${escHtml(m.cat)} · ${escHtml(m.repo)}</p><div class="mfacts"><div><span class="k">预计速度</span><b class="js-speed" title="${escHtml(view.formula)}">${escHtml(view.speedText)}</b></div><div><span class="k">放在哪</span><b class="js-place">${escHtml(view.place)}</b></div><div><span class="k">体积</span><b class="js-size">${escHtml(view.sizeText)}</b></div></div><p class="muted small js-detail">${escHtml(view.placeDetail)}</p></div><div class="right"><div class="qrow"><select class="qsel" aria-label="${escHtml(m.name)} 的量化" onchange="onQuantChange(this)">${quants.map((q) => `<option value="${q.id}">${escHtml(q.label)}</option>`).join("")}</select><span class="pill-fit js-fit${fitClass(view.fit)}">${escHtml(view.fit)}</span></div><div class="fitbar" title="${escHtml(view.barTitle)}"><span class="js-bar" style="width:${view.barPct}%"></span></div><button type="button" class="js-dl" data-repo="${escHtml(m.repo)}" onclick="askDownload(this.dataset.repo, this)">${escHtml(view.downloadText)}</button></div></article>`;
 }
-function paintHero(m) {
+function applyView(article, view) {
+  if (!article || !view) return;
+  const speed = article.querySelector(".js-speed");
+  if (speed) { speed.textContent = view.speedText; speed.title = view.formula; }
+  const place = article.querySelector(".js-place");
+  if (place) place.textContent = view.place;
+  const size = article.querySelector(".js-size");
+  if (size) size.textContent = view.sizeText;
+  const detail = article.querySelector(".js-detail");
+  if (detail) detail.textContent = view.placeDetail;
+  const fit = article.querySelector(".js-fit");
+  if (fit) { fit.textContent = view.fit; fit.className = "pill-fit js-fit" + fitClass(view.fit); }
+  const bar = article.querySelector(".js-bar");
+  if (bar) bar.style.width = view.barPct + "%";
+  const fitbar = article.querySelector(".fitbar");
+  if (fitbar) fitbar.title = view.barTitle;
+  const btn = article.querySelector(".js-dl");
+  if (btn) btn.textContent = view.downloadText;
+  if (article.dataset.hero === "1") paintHero(article.querySelector(".mtitle b") ? { name: article.querySelector(".mtitle b").textContent, repo: article.dataset.repo } : null, view);
+}
+function paintHero(m, view) {
   const chip = document.getElementById("hero-chip");
   const btn = document.getElementById("hero-dl");
   if (!m) return;
-  if (chip) chip.textContent = m.name + " · " + m.params;
-  if (btn) btn.dataset.repo = m.repo;
+  const shown = view || m.view || OpenLocRecommend.assess(m, hardwareView(), "Q4_K_M");
+  if (chip) chip.textContent = m.name + " · " + shown.sizeText + " · " + shown.speedText;
+  if (btn) {
+    btn.dataset.repo = m.repo || "";
+    btn.textContent = shown.downloadText === "下载" ? "下载推荐量化" : shown.downloadText;
+  }
 }
+window.onQuantChange = function(sel) {
+  const article = sel && sel.closest ? sel.closest("article") : null;
+  if (!article) return;
+  const repo = article.getAttribute("data-repo");
+  const m = shownModels.find((x) => x.repo === repo) || localModels().find((x) => x.repo === repo);
+  if (!m) return;
+  applyView(article, OpenLocRecommend.assess(m, hardwareView(), sel.value));
+};
 window.askDownload = async function(repo, btn) {
   if (btn && btn.dataset && btn.dataset.repo) repo = btn.dataset.repo;
-  const sel = btn && (btn.closest(".mc") || btn.closest(".hero-actions")) ? (btn.closest(".mc") || btn.parentElement).querySelector("select") : null;
+  let sel = btn && (btn.closest(".mc") || btn.closest(".hero-actions")) ? (btn.closest(".mc") || btn.parentElement).querySelector("select") : null;
+  if (!sel && btn && btn.id === "hero-dl") sel = document.querySelector('#recmodels article[data-hero="1"] select');
   const quant = ((sel && sel.value) || "Q4_K_M").replace("（常用）", "");
   if (!repo) { setActionNote("还没有可下载的推荐。先等目录出来。"); return; }
   if (!hasTauri()) {
@@ -284,8 +349,8 @@ window.askDownload = async function(repo, btn) {
   } catch (e) { setActionNote("没有开始下载：" + e); }
 };
 function totalB(params) {
-  const all = [...String(params).matchAll(/([\d.]+)\s*B/gi)].map((m) => parseFloat(m[1]));
-  return all.length ? Math.max(...all) : 99;
+  const scale = OpenLocRecommend.scaleOf(params);
+  return scale.totalB == null ? 99 : scale.totalB;
 }
 function smallerModels(models) {
   return models.filter((m) => totalB(m.params) <= 12).sort((a, b) => totalB(a.params) - totalB(b.params));
@@ -301,14 +366,33 @@ window.loadRecommended = async function() {
   let models;
   try { models = await invoke("get_catalog_with_fit"); }
   catch (e) { models = localModels(); }
+  rememberModels(models);
+  models = withView(models);
   const list = recommendList(models);
-  const judged = models.some((m) => m.fit && m.fit.startsWith("流畅"));
+  const hw = hardwareView();
+  const anySmooth = models.some((m) => m.fit === "流畅");
   const note = document.getElementById("fit-note");
   if (!list.length) { el.innerHTML = "<p class='muted'>目录是空的。</p>"; return; }
   paintHero(list[0]);
-  const head = judged ? "" : "<p class='muted small'>没有本机显存数据时，这里先列出总量约 12B 及以内的目录，标签是“待检测”，不代表已经适合你的电脑。</p>";
+  let head = "";
+  if (!hw.detected && hw.preview) head = "<p class='muted small'>网页预览没有显存数据。下面先列出总量约 12B 及以内的目录，速度写「待检测 / 网页预览」，不代表已经适合你的电脑。</p>";
+  else if (!hw.detected) head = "<p class='muted small'>还没有读到这台电脑的硬件。速度写「约估不可用」，不把目录当成已经适合你。</p>";
+  else if (!anySmooth) head = "<p class='muted small'>这些模型的整份权重放不进当前显存。下面是较小的几个，速度是约估，不是实测。</p>";
   el.innerHTML = head + list.map((m, i) => cardHtml(m, i === 0)).join("");
-  if (note && !judged) { note.hidden = false; note.textContent = "适合我的电脑：网页预览判断不了显存，筛选会暂时列出较小的模型，并标成待检测。"; }
+  if (note) {
+    if (!hw.detected) {
+      note.hidden = false;
+      note.textContent = hw.preview
+        ? "适合我的电脑：网页预览判断不了显存，筛选会暂时列出较小的模型，速度标成待检测 / 网页预览。"
+        : "适合我的电脑：硬件没读到，筛选会暂时列出较小的模型，速度标成约估不可用。";
+    } else if (!anySmooth) {
+      note.hidden = false;
+      note.textContent = "适合我的电脑：没有模型能整份放进显存。筛选列出较小的模型，并按内存判断能跑还是较慢。";
+    } else {
+      note.hidden = true;
+      note.textContent = "";
+    }
+  }
 };
 window.loadCatalog = async function() {
   const el = document.getElementById("catalog");
@@ -320,14 +404,18 @@ window.loadCatalog = async function() {
 function renderCatalog() {
   const el = document.getElementById("catalog");
   const note = document.getElementById("fit-note");
-  let list = catalogCache.slice();
+  rememberModels(catalogCache);
+  let list = withView(catalogCache.slice());
+  const hw = hardwareView();
   let explain = "";
   if (catFilter === "fit") {
-    const good = list.filter((m) => m.fit && m.fit.startsWith("流畅"));
+    const good = list.filter((m) => m.fit === "流畅");
     if (good.length) list = good;
     else {
-      list = smallerModels(list);
-      explain = "没有本机显存数据，下面只列出总量约 12B 及以内的目录，不代表已经适合你的电脑。";
+      list = withView(smallerModels(catalogCache));
+      if (!hw.detected && hw.preview) explain = "没有本机显存数据，下面只列出总量约 12B 及以内的目录，速度是待检测 / 网页预览，不代表已经适合你的电脑。";
+      else if (!hw.detected) explain = "硬件没读到，下面只列出总量约 12B 及以内的目录，速度是约估不可用。";
+      else explain = "没有模型能整份放进显存。下面列出较小的模型，能跑或较慢都是约估，不是实测。";
     }
   } else if (catFilter !== "all") list = list.filter((m) => m.cat === catFilter);
   if (note) { note.hidden = !explain; note.textContent = explain; }
@@ -360,16 +448,15 @@ window.loadInstalled = async function() {
   try {
     const list = await invoke("list_local_model_info");
     const h = await invoke("get_hardware");
+    hwSnapshot = hardwareFrom(h);
     if (tabBtn) tabBtn.textContent = "已安装（" + list.length + "）";
     const step3 = document.getElementById("step-model");
     const step3sub = document.getElementById("step-model-sub");
     if (list.length && step3) { step3.classList.add("done"); if (step3sub) step3sub.textContent = "本机已有模型"; }
     el.innerHTML = list.length ? list.map((m) => {
-      const quant = (m.name.match(/Q\d+_[A-Z0-9_]+/i) || ["—"])[0];
-      const fit = m.size_gb <= (h.gpu_vram_gb || 0) ? "流畅" : m.size_gb <= h.memory_total_gb ? "能跑" : "较慢";
-      const pct = Math.min(100, m.size_gb / Math.max(1, h.gpu_vram_gb || 8) * 100);
+      const view = estimateInstalled(m, hwSnapshot);
       const enc = encodeURIComponent(m.name);
-      return `<article class="mc"><div><div class="mtitle"><b>${escHtml(m.name)}</b><span class="pill-fit${fitClass(fit)}">${fit}</span></div><div class="mmeta">${escHtml(quant)} · ${m.size_gb.toFixed(1)} GB</div><div class="bar"><div class="fill teal" style="width:${pct}%"></div></div></div><div class="right"><div class="row"><button class="sec" type="button" onclick="openModelFolder(decodeURIComponent('${enc}'))">打开位置</button><button class="sec" type="button" onclick="delModel(decodeURIComponent('${enc}'))">删除</button><button type="button" onclick="runInstalled(decodeURIComponent('${enc}'))">运行</button></div></div></article>`;
+      return `<article class="mc"><div><div class="mtitle"><b>${escHtml(m.name)}</b><span class="pill-fit${fitClass(view.fit)}">${escHtml(view.fit)}</span></div><div class="mmeta">${escHtml(view.quant)} · ${escHtml(view.sizeText)} · ${escHtml(view.speedText)}</div><p class="muted small">${escHtml(view.place)}。${escHtml(view.placeDetail)}</p><div class="fitbar" title="${escHtml(view.barTitle)}"><span style="width:${view.barPct}%"></span></div></div><div class="right"><div class="row"><button class="sec" type="button" onclick="openModelFolder(decodeURIComponent('${enc}'))">打开位置</button><button class="sec" type="button" onclick="delModel(decodeURIComponent('${enc}'))">删除</button><button type="button" onclick="runInstalled(decodeURIComponent('${enc}'))">运行</button></div></div></article>`;
     }).join("") : "<p class='muted'>还没有已安装模型。去推荐模型下载，或在下面按完整路径导入。</p>";
   } catch (e) {
     if (tabBtn) tabBtn.textContent = "已安装";
@@ -605,21 +692,48 @@ window.setCtx = function(v, btn) {
   document.getElementById("ctx-now").textContent = v === 'auto' ? '自动' : (v/1024) + 'K';
   updatePlan();
 };
+function estimateInstalled(info, hw) {
+  const quant = OpenLocRecommend.inferQuant(info && info.name) || "Q4_K_M";
+  const hit = OpenLocRecommend.matchCatalog(info && info.name, localModels());
+  return OpenLocRecommend.assess({
+    name: info ? info.name : "",
+    repo: hit ? hit.repo : "",
+    params: hit ? hit.params : "",
+    desc: hit ? hit.desc : "",
+    cat: hit ? hit.cat : "",
+    sizeGb: info && info.size_gb > 0 ? info.size_gb : undefined,
+  }, hw || hardwareView(), quant);
+}
+function paintEstimate(view) {
+  const es = document.getElementById("est-speed");
+  const note = document.getElementById("est-speed-note");
+  if (!view) {
+    if (es) { es.textContent = hasTauri() ? "选中模型后约估" : "待检测 / 网页预览"; es.title = ""; }
+    if (note) note.textContent = hasTauri()
+      ? "选中已安装模型后，按显存、内存和量化约估 tok/s。这不是启动之后测到的速度。"
+      : "网页预览没有硬件数据，不会编一个 tok/s。";
+    return;
+  }
+  if (es) { es.textContent = view.speedText; es.title = view.formula; }
+  if (note) note.textContent = "和推荐卡片同一套带宽公式，不是启动之后测到的速度。";
+}
 window.updatePlan = async function() {
   const sel = document.getElementById("runmodel");
   const desc = document.getElementById("plan-desc");
   if (!sel || !sel.value) {
-    if (desc) desc.textContent = hasTauri() ? "选一个已下载模型后，这里会算它放进显存还是内存。" : "网页预览没有已安装模型。下面三条是分层示意，长度不代表你的电脑，速度也没有实测。";
-    const es = document.getElementById("est-speed"); if (es && !sel?.value) es.textContent = "待实测";
+    if (desc) desc.textContent = hasTauri() ? "选一个已下载模型后，这里会算它放进显存还是内存，并约估 tok/s。" : "网页预览没有已安装模型。下面三条是分层示意，长度不代表你的电脑，也不会编一个 tok/s。";
+    paintEstimate(null);
     return;
   }
   try {
     const list = await invoke("list_local_model_info");
     const m = list.find(x => x.name === sel.value);
     const h = await invoke("get_hardware");
-    if (!m) return;
+    if (!m) { paintEstimate(null); return; }
+    hwSnapshot = hardwareFrom(h);
+    const view = estimateInstalled(m, hwSnapshot);
     const vram = h.gpu_vram_gb || 0;
-    const fits = m.size_gb <= vram && vram > 0;
+    const fits = view.fit === "流畅";
     document.getElementById("plan-vram").textContent = "显卡 · " + h.gpu.replace("NVIDIA GeForce ", "");
     document.getElementById("plan-vram-sub").textContent = m.size_gb.toFixed(1) + " GB 模型 / " + (vram ? vram.toFixed(1) + " GB 显存" : "无独立显存");
     document.getElementById("plan-vram-bar").style.width = vram ? Math.min(100, m.size_gb / vram * 100) + "%" : "8%";
@@ -627,10 +741,14 @@ window.updatePlan = async function() {
     document.getElementById("plan-mem-bar").style.width = Math.min(100, m.size_gb / h.memory_total_gb * 100) + "%";
     const memSub = document.getElementById("plan-mem-sub"); if (memSub) memSub.textContent = fits ? "不需要" : "放不进显存的部分会到这里";
     const diskSub = document.getElementById("plan-disk-sub"); if (diskSub) diskSub.textContent = "按需读取";
-    if (desc) desc.textContent = fits ? "整个模型都能放进显存。具体每秒多少 token 要等真正跑起来，这里不预填一个速度。" : "模型放不进显存的部分会分到内存，速度会变慢。具体速度待实测。";
-    document.getElementById("est-speed").textContent = "待实测";
+    if (desc) desc.textContent = view.place + "。" + view.placeDetail;
+    paintEstimate(view);
   } catch (e) {
     if (desc) desc.textContent = "没能算出分层：" + e;
+    const es = document.getElementById("est-speed");
+    if (es) { es.textContent = "约估不可用"; es.title = ""; }
+    const note = document.getElementById("est-speed-note");
+    if (note) note.textContent = "没有拿到模型体积或硬件数据，所以不填 tok/s。";
   }
 };
 window.toggleThink = function() {
