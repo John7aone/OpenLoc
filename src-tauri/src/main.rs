@@ -9,6 +9,7 @@
 
 mod chat_proto;
 mod engine_io;
+mod region_shot;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -17,7 +18,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, Pid, System};
@@ -31,6 +32,8 @@ struct AppState {
     chat_port: Mutex<u16>,
     chat_pid: Mutex<Option<u32>>,
     tray_enabled: Mutex<bool>,
+    /// 托盘菜单「退出」会先把这个标成 true，关窗口时就不再隐藏到托盘。
+    quitting: AtomicBool,
     chat_gen: AtomicU64,
 }
 
@@ -885,99 +888,12 @@ fn web_search(query: String) -> Result<String, String> {
     if results.is_empty() { Ok("没搜到相关结果，请换个词再试。".to_string()) } else { Ok(results.join("\n\n")) }
 }
 
-// ---------- 截屏：保存到 outputs。侧栏是反馈截屏；对话里的截图进附件 ----------
-fn command_exists(cmd: &str) -> bool {
-    #[cfg(windows)]
-    let finder = "where";
-    #[cfg(not(windows))]
-    let finder = "which";
-    Command::new(finder)
-        .arg(cmd)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn gui_session() -> bool {
-    if cfg!(windows) || cfg!(target_os = "macos") {
-        return true;
-    }
-    std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
-}
-
-fn save_fullscreen(out: &Path) -> Result<(), String> {
-    let screens = screenshots::Screen::all().map_err(|e| format!("没有检测到显示器：{}", e))?;
-    let screen = screens.first().ok_or("没有检测到显示器")?;
-    let image = screen.capture().map_err(|e| format!("截屏失败：{}", e))?;
-    if let Some(parent) = out.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    image.save(out).map_err(|e| format!("保存截图失败：{}", e))?;
-    Ok(())
-}
-
-/// 有能把选区存成文件的系统工具时走选区。取消或失败不改走整屏，避免用户没选却贴上一张全屏。
-/// 没有任何选区工具时返回 Ok(false)，调用方再整屏截取。
-fn run_region_tool(out: &Path) -> Result<bool, String> {
-    if !gui_session() {
-        return Ok(false);
-    }
-    let path = out.display().to_string();
-    let tools: &[(&str, &[&str], &str)] = &[
-        ("gnome-screenshot", &["-a", "-f"], "path"),
-        ("spectacle", &["-r", "-b", "-n", "-o"], "path"),
-        ("scrot", &["-s"], "path"),
-        ("screencapture", &["-i"], "path"),
-        ("flameshot", &["gui", "-r"], "stdout"),
-    ];
-    for (cmd, args, kind) in tools {
-        if !command_exists(cmd) {
-            continue;
-        }
-        if *kind == "stdout" {
-            let output = Command::new(*cmd)
-                .args(*args)
-                .output()
-                .map_err(|e| format!("无法打开选区工具 {}：{}", cmd, e))?;
-            if output.status.success() && !output.stdout.is_empty() {
-                fs::write(out, &output.stdout).map_err(|e| format!("保存选区失败：{}", e))?;
-                return Ok(true);
-            }
-            return Err("选区已取消或没有生成图片，没有贴上附件。".to_string());
-        }
-        let mut owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
-        owned.push(path.clone());
-        let status = Command::new(*cmd)
-            .args(&owned)
-            .status()
-            .map_err(|e| format!("无法打开选区工具 {}：{}", cmd, e))?;
-        if status.success()
-            && out.is_file()
-            && fs::metadata(out).map(|m| m.len() > 0).unwrap_or(false)
-        {
-            return Ok(true);
-        }
-        let _ = fs::remove_file(out);
-        return Err("选区已取消或没有生成图片，没有贴上附件。".to_string());
-    }
-    Ok(false)
-}
-
+// ---------- 对话截图：只收用户确认的选区，不收整屏 ----------
 #[derive(Serialize)]
 struct ChatShot {
     path: String,
     name: String,
     mode: String,
-}
-
-#[tauri::command]
-fn take_screenshot() -> Result<String, String> {
-    ensure_dirs();
-    let out = outputs_dir().join(format!("shot_{}.png", chrono_stamp()));
-    save_fullscreen(&out)?;
-    Ok(format!("截图已保存：{}", out.display()))
 }
 
 #[tauri::command]
@@ -988,18 +904,11 @@ fn capture_chat_image() -> Result<ChatShot, String> {
         .unwrap_or_default();
     let name = format!("shot_{}_{:03}.png", d.as_secs(), d.subsec_millis());
     let out = outputs_dir().join(&name);
-    if run_region_tool(&out)? {
-        return Ok(ChatShot {
-            path: out.display().to_string(),
-            name,
-            mode: "region".to_string(),
-        });
-    }
-    save_fullscreen(&out)?;
+    region_shot::capture_region_file(&out)?;
     Ok(ChatShot {
         path: out.display().to_string(),
         name,
-        mode: "screen".to_string(),
+        mode: "region".to_string(),
     })
 }
 
@@ -1178,6 +1087,47 @@ fn extract_content(task: &str) -> Option<String> {
     }
 }
 
+/// 打包图标缺失时托盘仍显示蓝底大写 O，不回退成别的图案。
+fn fallback_o_icon() -> tauri::image::Image<'static> {
+    const N: u32 = 32;
+    let mut rgba = vec![0u8; (N * N * 4) as usize];
+    for y in 0..N {
+        for x in 0..N {
+            let fx = x as f32 + 0.5;
+            let fy = y as f32 + 0.5;
+            let t = (fx + fy) / (2.0 * N as f32);
+            let bg = [
+                (0x25 as f32 + (0x1D as f32 - 0x25 as f32) * t).round() as u8,
+                (0x63 as f32 + (0x4E as f32 - 0x63 as f32) * t).round() as u8,
+                (0xEB as f32 + (0xD8 as f32 - 0xEB as f32) * t).round() as u8,
+            ];
+            let cx = N as f32 / 2.0;
+            let cy = cx - 0.3;
+            let rx = 9.3;
+            let ry = 11.1;
+            let stroke = 2.9;
+            let dx = (fx - cx).abs();
+            let dy = (fy - cy).abs();
+            let n = 2.45_f32;
+            let outer = (dx / rx).powf(n) + (dy / ry).powf(n);
+            let inner = (dx / (rx - stroke)).powf(n) + (dy / (ry - stroke)).powf(n);
+            let letter = outer <= 1.0 && inner >= 1.0;
+            let i = ((y * N + x) * 4) as usize;
+            if letter {
+                rgba[i] = 255;
+                rgba[i + 1] = 255;
+                rgba[i + 2] = 255;
+            } else {
+                rgba[i] = bg[0];
+                rgba[i + 1] = bg[1];
+                rgba[i + 2] = bg[2];
+            }
+            rgba[i + 3] = 255;
+        }
+    }
+    tauri::image::Image::new_owned(rgba, N, N)
+}
+
 fn main() {
     ensure_dirs();
     tauri::Builder::default()
@@ -1187,6 +1137,7 @@ fn main() {
             chat_port: Mutex::new(0),
             chat_pid: Mutex::new(None),
             tray_enabled: Mutex::new(true),
+            quitting: AtomicBool::new(false),
             chat_gen: AtomicU64::new(0),
         })
         .invoke_handler(tauri::generate_handler![
@@ -1206,7 +1157,6 @@ fn main() {
             generate_motion_video,
             generate_diffusion_video,
             agent_run,
-            take_screenshot,
             capture_chat_image,
             delete_model,
             search_hf,
@@ -1220,18 +1170,23 @@ fn main() {
             web_search,
         ])
         .setup(|app| {
-            // 系统托盘：关窗口后程序不退出，托盘小图标还在，点它恢复窗口。
+            // 系统托盘：关窗口后默认只隐藏。右键「退出」会真正结束进程。
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
             let show = MenuItemBuilder::with_id("show", "显示 OpenLoc").build(app)?;
             let hide = MenuItemBuilder::with_id("hide", "隐藏窗口").build(app)?;
             let chat = MenuItemBuilder::with_id("chat", "开始对话").build(app)?;
             let models = MenuItemBuilder::with_id("models", "打开模型页").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "退出程序").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
             let menu = MenuBuilder::new(app).items(&[&show, &hide, &chat, &models, &quit]).build()?;
+            let tray_icon = if let Some(icon) = app.default_window_icon() {
+                icon.clone()
+            } else {
+                fallback_o_icon()
+            };
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().unwrap())
-                .tooltip("OpenLoc（点一下恢复窗口）")
+                .icon(tray_icon)
+                .tooltip("OpenLoc（右键菜单里可以退出）")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
@@ -1253,7 +1208,12 @@ fn main() {
                             let _ = w.eval(format!("document.querySelector('[data-page=\"{}\"]')?.click()", page));
                         }
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        if let Some(state) = app.try_state::<AppState>() {
+                            state.quitting.store(true, Ordering::SeqCst);
+                        }
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1268,11 +1228,13 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 点窗口右上角 X：默认只隐藏窗口，不退出程序，托盘图标还在。
-            // 用户在设置里关了“后台常驻”时，点 X 就直接退出。
+            // 点窗口右上角 X：默认只隐藏窗口，托盘图标还在。
+            // 设置里关掉“后台常驻”，或者托盘菜单点了「退出」，就真正结束。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let tray_on = window.state::<AppState>().tray_enabled.lock().map(|v| *v).unwrap_or(true);
-                if tray_on {
+                let state = window.state::<AppState>();
+                let quitting = state.quitting.load(Ordering::SeqCst);
+                let tray_on = state.tray_enabled.lock().map(|v| *v).unwrap_or(true);
+                if region_shot::hide_on_close(tray_on, quitting) {
                     let _ = window.hide();
                     api.prevent_close();
                 }

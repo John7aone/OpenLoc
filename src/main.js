@@ -89,10 +89,10 @@ function renderAttachments() {
     name.textContent = a.name;
     name.title = a.path || a.name;
     chip.appendChild(name);
-    if (a.mode) {
+    if (a.mode === "region") {
       const mode = document.createElement("span");
       mode.className = "attach-mode";
-      mode.textContent = a.mode === "region" ? "选区" : "整屏";
+      mode.textContent = "选区";
       chip.appendChild(mode);
     }
     const x = document.createElement("button");
@@ -771,14 +771,14 @@ window.pickAttach = function() {
 };
 window.captureForChat = async function() {
   if (!hasTauri()) {
-    setComposerNote("网页预览不可截屏，桌面版可用。没有贴上图片。");
+    setComposerNote("网页预览不能框选截图，没有贴上图片。请用桌面版 OpenLoc。");
     return;
   }
-  setComposerNote("正在打开截屏…");
+  setComposerNote("正在打开选区。框住要截的范围，点确认后才会加入当前对话；取消则不贴图。");
   try {
     const shot = await invoke("capture_chat_image");
-    if (!shot || !shot.name || !shot.path) {
-      setComposerNote("没有贴上图片。桌面版没有返回截图文件。");
+    if (!shot || !shot.name || !shot.path || shot.mode !== "region") {
+      setComposerNote("没有贴上图片。没有拿到选区截图。");
       return;
     }
     chatAttachments.push({
@@ -786,12 +786,11 @@ window.captureForChat = async function() {
       kind: "image",
       url: "",
       path: shot.path,
-      mode: shot.mode === "region" ? "region" : "screen",
+      mode: "region",
       source: "screenshot",
     });
     renderAttachments();
-    const how = shot.mode === "region" ? "系统选区" : "整屏";
-    setComposerNote("已把" + how + "截图加入当前对话附件（" + shot.name + "）。图片留在本机，没有上传。");
+    setComposerNote("已把选区截图加入当前对话附件（" + shot.name + "）。图片留在本机，没有上传。");
   } catch (e) {
     setComposerNote("没有贴上图片。" + e);
   }
@@ -952,11 +951,6 @@ window.genVid = async function() {
   try { document.getElementById("vidmsg").textContent = await invoke("generate_diffusion_video", { model: document.getElementById("vidmodel").value, prompt: document.getElementById("vidprompt").value, frames: 25 }); }
   catch (e) { document.getElementById("vidmsg").textContent = "失败：" + e; }
 };
-window.takeShot = async function() {
-  const el = document.getElementById("shotmsg");
-  try { const r = await invoke("take_screenshot"); if (el) el.textContent = r; alert(r + "\n\n把这张图发给 Muse，就能帮你看问题了。"); }
-  catch (e) { if (el) el.textContent = "截屏失败：" + e; alert("截屏失败：" + e); }
-};
 window.runAgent = async function() {
   const el = document.getElementById("asteps");
   const task = document.getElementById("atask").value.trim();
@@ -1041,16 +1035,19 @@ function renderAgentAttach() {
 }
 window.captureForAgent = async function() {
   if (!hasTauri()) {
-    setAgentNote("网页预览不可截屏，桌面版可用。没有贴上图片。");
+    setAgentNote("网页预览不能框选截图，没有贴上图片。请用桌面版 OpenLoc。");
     return;
   }
-  setAgentNote("正在打开截屏…");
+  setAgentNote("正在打开选区。确认后才会记在这个任务旁；取消则不贴图。");
   try {
     const shot = await invoke("capture_chat_image");
-    if (!shot || !shot.name || !shot.path) { setAgentNote("没有贴上图片。桌面版没有返回截图文件。"); return; }
-    agentAttachments.push({ name: shot.name, path: shot.path, mode: shot.mode === "region" ? "region" : "screen" });
+    if (!shot || !shot.name || !shot.path || shot.mode !== "region") {
+      setAgentNote("没有贴上图片。没有拿到选区截图。");
+      return;
+    }
+    agentAttachments.push({ name: shot.name, path: shot.path, mode: "region" });
     renderAgentAttach();
-    setAgentNote("已把截图记在这个任务旁（" + shot.name + "）。Agent 读不到图片内容，图片也没有上传。");
+    setAgentNote("已把选区截图记在这个任务旁（" + shot.name + "）。Agent 读不到图片内容，图片也没有上传。");
   } catch (e) { setAgentNote("没有贴上图片。" + e); }
 };
 window.newChat = function() {
