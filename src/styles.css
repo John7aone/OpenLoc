@@ -667,7 +667,7 @@ html[data-theme="light"] button.theme-toggle .icon-moon { display: block; }
 .plan-block.disk{background:var(--bg-soft)}
 .switch-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
 .switch-row b{display:block}
-input.ghost-check,#importfile,#chatfile{position:fixed;left:-40px;top:0;width:1px;height:1px;margin:0;padding:0;border:0;opacity:0}
+input.ghost-check,#importfile,#chatfile,#enginezip{position:fixed;left:-40px;top:0;width:1px;height:1px;margin:0;padding:0;border:0;opacity:0}
 .agent-wrap{display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:start}
 .agent-side{display:flex;flex-direction:column;gap:8px}
 button.task{width:100%;text-align:left;background:var(--bg-soft);color:var(--text);box-shadow:none;border:1px solid var(--line)}
@@ -683,8 +683,45 @@ button.task.on{border-color:var(--accent);background:var(--bg-elev)}
 .setcard h3:first-child{margin-top:0}
 .setcard label{display:block;margin-top:8px}
 .setcard label input[type=checkbox]{width:auto;display:inline-block;margin:0 8px 0 0}
+.set-field{margin:0 0 14px}
+.set-field > b{display:block;margin:0 0 6px}
+.set-field input,.set-field select{margin:0}
+.set-hint{margin:6px 0 0}
+.field-row{display:flex;align-items:center;gap:10px}
+.field-row > input,.field-row > select{flex:1;width:auto;margin:0}
+.field-row > button{flex-shrink:0;margin:0}
 .lang-row{align-items:center}
-.lang-row select{width:auto;min-width:220px;margin:0}
+.lang-row select{width:auto;min-width:220px;max-width:280px;flex:0 1 280px;margin:0}
+#themeSel{max-width:280px;flex:0 1 280px}
+.gpu-row,.version-row,.setcard-head,.set-actions{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.gpu-row > button,.setcard-head > button{margin:0;flex-shrink:0}
+#gpu-name{display:block;font-size:16px}
+#gpu-info{margin:4px 0}
+#gpu-detected{margin:0}
+.engine-title{display:block;font-size:16px;margin:0 0 4px}
+.engine-path{margin:0 0 10px;word-break:break-all}
+.engine-actions{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.engine-actions button{margin:0}
+.version-id{display:flex;align-items:center;gap:12px;min-width:0}
+.version-id .ver{color:var(--muted);font-weight:600}
+.version-card .version-row{align-items:center}
+details.setcard > summary{cursor:pointer;font-weight:700;font-size:18px}
+details.setcard > summary::marker{color:var(--muted)}
+details.setcard[open] > summary{margin-bottom:14px}
+#api-list:empty{display:none}
+.api-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.api-row:last-child{border-bottom:0}
+.api-meta{min-width:0}
+.api-meta b{display:block}
+.api-meta span{display:block;color:var(--muted);font-size:13px;word-break:break-all}
+.api-actions{display:flex;gap:8px;flex-shrink:0}
+.api-actions button{margin:0}
+#api-form{margin:8px 0 12px;padding-top:8px;border-top:1px solid var(--line)}
+.set-actions{align-items:center;flex-wrap:wrap;margin:4px 0 12px}
+.set-actions button{margin:0}
+#savemsg{margin:0;flex:1 1 220px}
+.privacy{margin:0 2px 28px;line-height:1.6}
+#hf-mirror,#gh-prefix,#hf-token,#apiport{margin-top:0}
 #asteps:empty{display:none}
 #chat.tab.on{display:flex;flex-direction:column}
 #chat .chatwrap{flex:1}

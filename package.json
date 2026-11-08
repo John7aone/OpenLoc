@@ -11,7 +11,7 @@
     "build": "tauri build",
     "dev": "tauri dev",
     "tauri": "tauri",
-    "test": "node --test test/chat-flow.test.mjs test/recommend.test.mjs test/region-shot.test.mjs"
+    "test": "node --test test/chat-flow.test.mjs test/recommend.test.mjs test/region-shot.test.mjs test/settings-page.test.mjs"
   },
   "type": "module",
   "version": "0.1.0"
