@@ -189,6 +189,15 @@ test("参数未知时即使有显卡也不编数字；有文件大小则按整�
   assert.match(file.formula, /整份文件/);
 });
 
+test("搜索页给出的每参数字节优先于量化表", () => {
+  const view = rec.assess(model("4B", { sizeGb: 2.2, bytesPerParam: 2.2 / 4 }), gpu8, "Q8_0");
+  assert.equal(view.fit, "流畅");
+  assert.equal(view.speedText, "约 97 tok/s");
+  assert.match(view.formula, /每参数约 0\.550 GB/);
+  assert.match(view.formula, /不是实测/);
+  assert.equal(view.formula.includes("量化 Q8_0"), false);
+});
+
 test("文件大小优先决定能不能放进显存", () => {
   const view = rec.assess(model("4B", { sizeGb: 20 }), gpu8, "Q4_K_M");
   assert.equal(view.fit, "能跑");

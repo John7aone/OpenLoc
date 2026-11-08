@@ -557,33 +557,65 @@ window.downloadImgPack = function(name) {
 window.searchHfName = async function(name) {
   catTab("search", document.getElementById('sub-search')); document.getElementById("hfq").value = name; searchHf();
 };
+let hfListHtml = "";
+function hfHit(raw) {
+  if (typeof raw === "string") return { id: raw, downloads: null };
+  return { id: (raw && (raw.id || raw.modelId)) || "", downloads: raw ? raw.downloads : null };
+}
+function renderHfList(hits) {
+  const repos = (hits || []).map(hfHit).filter((r) => r.id);
+  if (!repos.length) return "<p class='search-empty'>没搜到，换个词试试。</p>";
+  return repos.map((r) => {
+    const dl = OpenLocHf.formatDownloads(r.downloads);
+    const enc = encodeURIComponent(r.id);
+    return `<article class="mc hf-repo"><div class="mbody"><div class="mtitle"><b>${escHtml(r.id)}</b></div><div class="mfacts"><div><span class="k">体积</span><b>点开后显示</b></div><div><span class="k">近 30 天下载</span><b>${escHtml(dl)}</b><span class="muted small">整个仓库</span></div><div><span class="k">本机 tok/s</span><b>点开后估算</b></div></div><p class="muted small">每个量化文件的体积不一样。点开后，下载按钮旁边会写出该文件的字节、仓库下载次数，以及估算 tok/s。</p></div><div class="right"><button type="button" data-repo="${enc}" onclick="showFiles(decodeURIComponent(this.dataset.repo))">查看文件并下载</button></div></article>`;
+  }).join("");
+}
+function renderHfDetail(detail) {
+  const view = OpenLocHf.presentDetail(detail, hardwareView(), localModels());
+  const head = `<div class="hf-head"><button type="button" class="sec" onclick="showHfList()">返回搜索结果</button><b>${escHtml(view.repo)}</b><span class="muted">近 30 天仓库下载 ${escHtml(view.downloadsText)}</span></div>`;
+  if (!view.files.length) return head + "<p class='search-empty'>这个仓库里没有可下载的 GGUF 文件。</p>";
+  const rows = view.files.map((f) => {
+    const encRepo = encodeURIComponent(view.repo);
+    const encFile = encodeURIComponent(f.path);
+    const extra = f.sizeExtra ? `<span class="muted small">${escHtml(f.sizeExtra)}</span>` : "";
+    const cap = f.speedCaption ? `<span class="muted small">${escHtml(f.speedCaption)}</span>` : "";
+    return `<article class="hf-file"><div><div class="hf-name">${escHtml(f.path)}</div><div class="mfacts"><div><span class="k">体积</span><b>${escHtml(f.sizeText)}</b>${extra}</div><div><span class="k">近 30 天下载</span><b>${escHtml(f.downloadsText)}</b><span class="muted small">仓库，不是这个文件</span></div><div><span class="k">本机 tok/s</span><b class="hf-speed" title="${escHtml(f.formula)}">${escHtml(f.speedText)}</b>${cap}</div></div><p class="muted small">${escHtml(f.detail)}</p></div><div class="right"><button type="button" data-repo="${encRepo}" data-file="${encFile}" aria-label="下载 ${escHtml(f.path)}" onclick="dlCat(decodeURIComponent(this.dataset.repo), decodeURIComponent(this.dataset.file))">下载</button></div></article>`;
+  }).join("");
+  return head + `<p class="muted small">共 ${view.files.length} 个 GGUF。mmproj 不在这张表里。</p>` + rows;
+}
+window.showHfList = function() {
+  const el = document.getElementById("hfres");
+  if (el) el.innerHTML = hfListHtml || "<p class='search-empty'>还没有搜索结果。</p>";
+};
 window.searchHf = async function() {
   const el = document.getElementById("hfres");
   const empty = document.getElementById("hfempty");
   const q = document.getElementById("hfq").value.trim();
-  if (!q) { if (empty) empty.hidden = false; el.innerHTML = ""; return; }
+  if (!q) { if (empty) empty.hidden = false; el.innerHTML = ""; hfListHtml = ""; return; }
   if (empty) empty.hidden = true;
-  if (!hasTauri()) {
-    el.innerHTML = "<p class='search-empty'>网页预览不会请求 Hugging Face。桌面版会搜索「" + escHtml(q) + "」的 GGUF 仓库，搜到才列出，不会编造仓库名。</p>";
-    return;
-  }
   el.textContent = "搜索中…";
   try {
     const prefs = downloadPrefs();
-    const repos = await invoke("search_hf", { query: q, hfBase: OpenLocSettings.hfApiBase(prefs.hfMirror), hfToken: prefs.hfToken });
-    el.innerHTML = repos.length ? repos.map((r) => `<div class="mcard"><div class="mtitle"><b>${escHtml(r)}</b><button type="button" onclick="showFiles('${escHtml(r)}')">查看文件并下载</button></div></div>`).join("") : "<p class='search-empty'>没搜到，换个词试试。</p>";
-  } catch (e) { el.innerHTML = "<p class='search-empty'>没有搜到：" + escHtml(e) + "</p>"; }
+    const repos = hasTauri()
+      ? await invoke("search_hf", { query: q, hfBase: OpenLocSettings.hfApiBase(prefs.hfMirror), hfToken: prefs.hfToken })
+      : await OpenLocHf.searchPublic(q);
+    hfListHtml = renderHfList(repos);
+    el.innerHTML = hfListHtml;
+  } catch (e) { hfListHtml = ""; el.innerHTML = "<p class='search-empty'>没有搜到：" + escHtml(e) + "</p>"; }
 };
 window.showFiles = async function(repo) {
-  const el = document.getElementById("catfiles");
-  if (!hasTauri()) { if (el) el.textContent = "网页预览不会查询 " + repo + " 的文件列表。"; return; }
-  el.textContent = "查询 HuggingFace 文件列表中…";
+  const el = document.getElementById("hfres");
+  if (!el) return;
+  if (!repo) return;
+  el.innerHTML = "<p class='muted'>正在读取 " + escHtml(repo) + " 的文件体积和下载次数…</p>";
   try {
     const prefs = downloadPrefs();
-    const files = await invoke("list_hf_files", { repo, hfBase: OpenLocSettings.hfApiBase(prefs.hfMirror), hfToken: prefs.hfToken });
-    el.innerHTML = "<b>" + escHtml(repo) + "</b><br>" + files.map((f) => `${escHtml(f)} <button type="button" onclick="dlCat('${escHtml(repo)}','${escHtml(f)}')">下载</button>`).join("<br>");
-    const hf = document.getElementById("hfres"); if (hf && document.getElementById("cat-search").style.display !== "none") hf.innerHTML = el.innerHTML;
-  } catch (e) { el.textContent = "没有查到文件：" + e; }
+    const detail = hasTauri()
+      ? await invoke("hf_repo_detail", { repo, hfBase: OpenLocSettings.hfApiBase(prefs.hfMirror), hfToken: prefs.hfToken })
+      : await OpenLocHf.detailPublic(repo);
+    el.innerHTML = renderHfDetail(detail);
+  } catch (e) { el.innerHTML = "<p class='search-empty'>没有查到文件：" + escHtml(e) + "</p>"; }
 };
 function downloadPrefs() {
   let mirror = "";
@@ -597,7 +629,10 @@ function downloadPrefs() {
   return { hfMirror: mirror, githubPrefix: prefix, hfToken: token };
 }
 window.dlCat = async function(repo, f) {
-  if (!hasTauri()) { alert("网页预览不会下载模型。"); return; }
+  if (!hasTauri()) {
+    setActionNote("网页预览不会下载「" + f + "」。桌面版会从 Hugging Face 拉取这个文件。");
+    return;
+  }
   const prefs = downloadPrefs();
   const url = OpenLocSettings.prepareDownloadUrl("https://huggingface.co/" + repo + "/resolve/main/" + f, prefs);
   try {
@@ -609,7 +644,7 @@ window.dlCat = async function(repo, f) {
       tokenHost: OpenLocSettings.tokenHost(prefs.hfMirror),
     });
     alert("已开始下载 " + f);
-  } catch (e) { alert("没有开始下载：" + e); }
+  } catch (e) { setActionNote("没有开始下载：" + e); }
 };
 window.dl = async function(kind, url, filename) {
   const els = [document.getElementById("dlmsg"), document.getElementById("run-dlmsg"), document.getElementById("engine-msg")].filter(Boolean);

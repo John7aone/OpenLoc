@@ -19,6 +19,9 @@
 //     内存那段按 12 GB/s（保守的搬运带宽，不是测到的 PCIe）。
 //   没有独立显存：内存带宽档 × 0.18。内存 ≥32 GB 按 64 GB/s，否则按 42 GB/s。
 // 没有硬件、或参数规模和文件大小都不知道时，不给 tok/s。
+// 调用方如果已经知道真实体积，可以同时给 model.bytesPerParam（GB/参数）。
+// 搜索页用「文件字节 ÷ 总参数」填这个数，避免把 BF16 当成 Q4 的默认档。
+// 没填时仍用下面的量化表，推荐卡片和已安装列表的数字不变。
 (function (root) {
   var OVERHEAD_GB = 0.8;
   var VRAM_USABLE = 0.85;
@@ -91,13 +94,17 @@
     return (Math.round(n * 10) / 10).toFixed(1);
   }
 
-  function normalizeQuant(value) {
+  function knownQuantId(value) {
     var raw = String(value || "").replace("（常用）", "").replace("（推荐）", "").trim().toUpperCase();
     if (raw.indexOf("Q8") === 0) return "Q8_0";
     if (raw.indexOf("Q6") === 0) return "Q6_K";
     if (raw.indexOf("Q5") === 0) return "Q5_K_M";
     if (raw.indexOf("Q4") === 0) return "Q4_K_M";
-    return "Q4_K_M";
+    return "";
+  }
+
+  function normalizeQuant(value) {
+    return knownQuantId(value) || "Q4_K_M";
   }
 
   function quantBytes(quant) {
@@ -208,8 +215,10 @@
   function assess(model, hardware, quant) {
     var hw = hardware || emptyHardware(true);
     var scale = scaleOf(model && model.params);
-    var quantId = normalizeQuant(quant || inferQuant(model && model.name) || "Q4_K_M");
-    var bytes = quantBytes(quantId);
+    var namedQuant = knownQuantId(quant) || inferQuant(model && model.name);
+    var quantId = namedQuant || "Q4_K_M";
+    var explicitBytes = !!(model && isNum(model.bytesPerParam) && model.bytesPerParam > 0);
+    var bytes = explicitBytes ? model.bytesPerParam : quantBytes(quantId);
     var sizeFromFile = !!(model && isNum(model.sizeGb) && model.sizeGb > 0);
     var sizeGb = sizeFromFile ? model.sizeGb : (scale.known ? scale.totalB * bytes : null);
     var runtime = sizeGb != null ? sizeGb + OVERHEAD_GB : null;
@@ -303,7 +312,10 @@
       var presented = presentTok(bw / readGb);
       tokPerSec = presented.tokPerSec;
       speedText = presented.speedText;
-      formula = "量化 " + quantId + "。每 token 约读 " + readGb.toFixed(2) + " GB（" + readNote + "）。有效带宽 " + bw.toFixed(1) + " GB/s：" + bwNote + "。tok/s ≈ 带宽 ÷ 读取量。不是实测。";
+      var quantLead = explicitBytes
+        ? ("按文件体积换算，每参数约 " + bytes.toFixed(3) + " GB。")
+        : ("量化 " + quantId + "。");
+      formula = quantLead + "每 token 约读 " + readGb.toFixed(2) + " GB（" + readNote + "）。有效带宽 " + bw.toFixed(1) + " GB/s：" + bwNote + "。tok/s ≈ 带宽 ÷ 读取量。不是实测。";
     } else if (!hw.detected && hw.preview) {
       formula = "网页预览没有显存、内存和显卡名，不能约估 tok/s。";
     } else if (!hw.detected) {
