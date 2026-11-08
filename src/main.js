@@ -1070,11 +1070,6 @@ window.genVid = async function() {
   try { document.getElementById("vidmsg").textContent = await invoke("generate_diffusion_video", { model: document.getElementById("vidmodel").value, prompt: document.getElementById("vidprompt").value, frames: 25 }); }
   catch (e) { document.getElementById("vidmsg").textContent = "失败：" + e; }
 };
-window.takeShot = async function() {
-  const el = document.getElementById("shotmsg");
-  try { const r = await invoke("take_screenshot"); if (el) el.textContent = r; alert(r + "\n\n把这张图发给 Muse，就能帮你看问题了。"); }
-  catch (e) { if (el) el.textContent = "截屏失败：" + e; alert("截屏失败：" + e); }
-};
 window.runAgent = async function() {
   const el = document.getElementById("asteps");
   const task = document.getElementById("atask").value.trim();

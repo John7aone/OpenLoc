@@ -931,7 +931,7 @@ fn web_search(query: String) -> Result<String, String> {
     if results.is_empty() { Ok("没搜到相关结果，请换个词再试。".to_string()) } else { Ok(results.join("\n\n")) }
 }
 
-// ---------- 截屏：保存到 outputs。侧栏是反馈截屏；对话里的截图进附件 ----------
+// ---------- 截屏：保存到 outputs。对话和 Agent 的截图进附件 ----------
 fn command_exists(cmd: &str) -> bool {
     #[cfg(windows)]
     let finder = "where";
@@ -1016,14 +1016,6 @@ struct ChatShot {
     path: String,
     name: String,
     mode: String,
-}
-
-#[tauri::command]
-fn take_screenshot() -> Result<String, String> {
-    ensure_dirs();
-    let out = outputs_dir().join(format!("shot_{}.png", chrono_stamp()));
-    save_fullscreen(&out)?;
-    Ok(format!("截图已保存：{}", out.display()))
 }
 
 #[tauri::command]
@@ -1287,7 +1279,6 @@ fn main() {
             generate_motion_video,
             generate_diffusion_video,
             agent_run,
-            take_screenshot,
             capture_chat_image,
             delete_model,
             search_hf,
