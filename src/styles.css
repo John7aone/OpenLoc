@@ -156,16 +156,6 @@ nav button.on:hover {
   flex-direction: column;
   gap: 8px;
 }
-.sidebar-foot button {
-  width: 100%;
-  margin: 0;
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--line);
-  box-shadow: none;
-}
-.sidebar-foot button:hover:not(:disabled) { background: var(--bg-soft); filter: none; }
-.sidebar-foot .small { text-align: center; }
 
 .main {
   flex: 1;
