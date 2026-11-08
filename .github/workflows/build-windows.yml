@@ -22,6 +22,53 @@ jobs:
         run: python src-tauri/icons/generate-icon.py
       - name: Generate icons
         run: npx @tauri-apps/cli icon src-tauri/icons/icon.png
+      - name: Prefetch WiX and NSIS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:LOCALAPPDATA 'tauri'
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+
+          function Save-Url([string]$Url, [string]$OutFile, [string]$Algo, [string]$Expected) {
+            for ($i = 1; $i -le 10; $i++) {
+              try {
+                if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
+                & curl.exe --fail --location --retry 10 --retry-all-errors --retry-delay 5 -o $OutFile $Url
+                if ($LASTEXITCODE -ne 0) { throw "curl exit $LASTEXITCODE" }
+                $hash = (Get-FileHash -Algorithm $Algo -Path $OutFile).Hash
+                if ($hash -ne $Expected) { throw "hash $hash != $Expected" }
+                return
+              } catch {
+                Write-Host "download attempt $i failed for ${Url}: $_"
+                if ($i -eq 10) { throw }
+                Start-Sleep -Seconds ([Math]::Min(60, 5 * $i))
+              }
+            }
+          }
+
+          $wixDir = Join-Path $tools 'WixTools314'
+          $wixZip = Join-Path $env:RUNNER_TEMP 'wix314-binaries.zip'
+          Save-Url 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip' $wixZip 'SHA256' '6AC824E1642D6F7277D0ED7EA09411A508F6116BA6FAE0AA5F2C7DAA2FF43D31'
+          if (Test-Path $wixDir) { Remove-Item $wixDir -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $wixDir | Out-Null
+          tar.exe -xf $wixZip -C $wixDir
+          if ($LASTEXITCODE -ne 0) { throw 'failed to extract WiX' }
+          if (-not (Test-Path (Join-Path $wixDir 'candle.exe'))) { throw 'WiX candle.exe missing after extract' }
+
+          $nsisZip = Join-Path $env:RUNNER_TEMP 'nsis-3.13.zip'
+          $extract = Join-Path $env:RUNNER_TEMP 'nsis-extract'
+          Save-Url 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip' $nsisZip 'SHA1' 'DB14F8AF2EA346B786C6AE19343F61AAF5E09B8E'
+          if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          tar.exe -xf $nsisZip -C $extract
+          if ($LASTEXITCODE -ne 0) { throw 'failed to extract NSIS' }
+          $nsisDir = Join-Path $tools 'NSIS'
+          if (Test-Path $nsisDir) { Remove-Item $nsisDir -Recurse -Force }
+          Move-Item (Join-Path $extract 'nsis-3.13') $nsisDir
+          $dll = Join-Path $nsisDir 'Plugins\x86-unicode\additional\nsis_tauri_utils.dll'
+          New-Item -ItemType Directory -Force -Path (Split-Path $dll) | Out-Null
+          Save-Url 'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll' $dll 'SHA1' '75197FEE3C6A814FE035788D1C34EAD39349B860'
+          if (-not (Test-Path (Join-Path $nsisDir 'makensis.exe'))) { throw 'NSIS makensis.exe missing after extract' }
       - name: Build Tauri app
         run: npm run tauri build
       - name: Upload bundle
