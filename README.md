@@ -23,7 +23,8 @@
 - **画图**：stable-diffusion.cpp 的 sd-cli。
 - **视频**：两种，界面上分得清清楚楚——ffmpeg 动效视频（不是扩散生成，CPU 就能跑）；sd-cli 的 vid_gen 扩散视频（Wan，需要 Wan 视频模型和足够显存）。
 - **Agent**：指定一个工作文件夹后，本地模型做计划，在文件夹内读写文件、跑命令，步骤实时显示。超出文件夹、含 `..`、删除、格式化等一律拦截，不要把整个文档、桌面或系统盘交给它。
-- **应用图标**：窗口、任务栏、托盘和安装包用同一张图，蓝底（#2563eb / #1d4ed8）上是一个清晰的大写字母 O。侧栏左上角仍是原来的 OL 品牌块。打包前由 `src-tauri/icons/generate-icon.py` 生成，再交给 `tauri icon`。
+- **应用图标**：窗口、任务栏、托盘和安装包用同一张图，蓝底（#2563eb / #1d4ed8）上是一个清晰的大写字母 O。侧栏左上角仍是原来的 OL 品牌块。打包前由 `src-tauri/icons/generate-icon.py` 生成，再交给 `tauri icon`。侧栏底部不再放「截屏保存」。
+- **托盘**：右键保留「显示 OpenLoc」「隐藏窗口」，并有「退出」。点「退出」会结束程序；不会被「点 X 只隐藏到托盘」拦住。设置里关掉后台常驻时，点窗口 X 仍然直接退出。
 - **主题风格**：浅色 / 深色 / 跟随系统。设置里的「外观」可选这三项。侧栏底部的月亮 / 太阳会改成对应的浅色或深色。本地保存。浅色是灰白底，深色是海军蓝底、抬升卡片，按钮主色是蓝。
 - **本地模型导入**：已有的 .gguf / .safetensors / .ckpt 粘个路径就能导入。
 
@@ -99,13 +100,13 @@ node --test test/chat-flow.test.mjs
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-在准备推荐速度那次提交的 Linux 环境里，`npm test` 为 22 通过（`test/chat-flow.test.mjs` 8 项，`test/recommend.test.mjs` 14 项）。搜索页这次再加上 `test/hf-search.test.mjs` 8 项，并保留选区截图的 `test/region-shot.test.mjs` 和设置页的 `test/settings-page.test.mjs`，`npm test` 为 35 通过。上一次能编过桌面依赖时，`cargo test --manifest-path src-tauri/Cargo.toml` 为 22 通过（原有 18 项，加上推荐落点 4 项）。这次机器没有 `gdk-3.0`，`cargo test` 停在 `gdk-sys`，新加的 `hf_meta_tests` 没在这里跑起来。这台环境自带的 Cargo 1.83 读不了现有 lockfile 里的 edition 2024，所以 Rust 测试用的是 Rust 1.99。其中 2 项真实模型测试在没有 `OPENLOC_LIVE_PORT` 时直接返回，不访问网络。另一次 `OPENLOC_LIVE_PORT=18080 cargo test --manifest-path src-tauri/Cargo.toml live_model` 走了下面的真模型。Rust 侧用本机假 HTTP 服务覆盖：健康检查只有 `status=ok` 才算就绪、端口占用、非流式回复、思考字段被拒绝后重试、流式中途取消。解压测试按 Windows CPU 包的布局放了根目录上的 `llama-server.exe`，并拒绝路径穿越。推荐速度的数字由 `test/recommend.test.mjs` 锁住，例如 4B Q4 在标称 608 GB/s 的 8 GB 显卡上约为 95 tok/s。这是公式结果，不是那块显卡的实测。
+在准备推荐速度那次提交的 Linux 环境里，`npm test` 为 22 通过（`test/chat-flow.test.mjs` 8 项，`test/recommend.test.mjs` 14 项）。搜索页这次再加上 `test/hf-search.test.mjs` 8 项，并保留选区截图的 `test/region-shot.test.mjs` 和设置页的 `test/settings-page.test.mjs`，`npm test` 为 35 通过。上一次能编过桌面依赖时，`cargo test --manifest-path src-tauri/Cargo.toml` 为 22 通过（原有 18 项，加上推荐落点 4 项）。这次机器没有 `gdk-3.0`，`cargo test` 停在 `gdk-sys`，新加的 `hf_meta_tests` 没在这里跑起来。这台环境自带的 Cargo 1.83 读不了现有 lockfile 里的 edition 2024，所以 Rust 测试用的是 Rust 1.99。其中 2 项真实模型测试在没有 `OPENLOC_LIVE_PORT` 时直接返回，不访问网络。另一次 `OPENLOC_LIVE_PORT=18080 cargo test --manifest-path src-tauri/Cargo.toml live_model` 走了下面的真模型。Rust 侧用本机假 HTTP 服务覆盖：健康检查只有 `status=ok` 才算就绪、端口占用、非流式回复、思考字段被拒绝后重试、流式中途取消。解压测试按 Windows CPU 包的布局放了根目录上的 `llama-server.exe`，并拒绝路径穿越。推荐速度的数字由 `test/recommend.test.mjs` 锁住，例如 4B Q4 在标称 608 GB/s 的 8 GB 显卡上约为 95 tok/s。这是公式结果，不是那块显卡的实测。托盘「退出」会先记下正在退出，关窗口时不再隐藏；这项和选区取消不算成功一起留在 Rust 测试里。
 
 另一次真实推理（不是 mock）：llama.cpp `b12110` 的 Ubuntu x64 CPU 包，模型 `stories15M-q4_0.gguf`（约 19MB，公开小模型）。命令行测试里 `llama-server` 监听 `127.0.0.1:18080`，`/health` 返回 ok。经 OpenLoc 的请求函数拿到非空回复，非流式开头是 “Suddenled the ground…”，流式开头是 “Sisss are very icy windows…”。同一套引擎和模型也在 Linux 桌面窗口里走过：运行页显示“健康检查已通过”和 `127.0.0.1:8080`，联网开关保持关闭，对话页收到以 “Suddenled her feet…” 开头的回复。限制：这是 TinyStories 小模型，不会按指令回答；训练上下文只有 128，引擎把更长的上下文截断了；跑在 Linux CPU 上，不能当成 Windows 或显卡结果。没有下载更大的模型，也没有调用收费 API。
 
 ## 没在 Windows 真机上验证
 
-这个环境不能打出 Windows 安装包，也没有在 Windows 电脑上双击运行过。下面的步骤是给 Windows 用户自己验证的，不是“已经通过”的记录。公开仓库上的 `Build Windows` 使用 GitHub 托管的标准 `windows-latest`，没有加大权限，也没有开付费 runner。安装包如果打出来了，在该次 Actions 运行的 Artifacts 里，名字是 `openloc-windows`。过期或运行失败就没有可下载的包。
+这个环境不能打出 Windows 安装包，也没有在 Windows 电脑上双击运行过，看不到任务栏托盘，也不能把 Windows 选区遮罩真正弹出来点一次。下面的步骤是给 Windows 用户自己验证的，不是“已经通过”的记录。网页预览里点「截图」只会说明不能框选，不会出现附件。公开仓库上的 `Build Windows` 使用 GitHub 托管的标准 `windows-latest`，没有加大权限，也没有开付费 runner。安装包如果打出来了，在该次 Actions 运行的 Artifacts 里，名字是 `openloc-windows`。过期或运行失败就没有可下载的包。
 
 Windows 上建议这样试：
 
@@ -123,8 +124,10 @@ npm run tauri build
 3. 到「模型」页下载一个小的 GGUF，或在「已安装」里按完整路径导入。先不要下特别大的仓库。
 4. 回到「运行」页选中这个文件，点「启动模型」。只有健康检查通过才显示运行中，地址是 `http://127.0.0.1:端口/v1`。
 5. 到「对话」页发一句话。联网开关保持关闭。回复应来自本机。点停止应留下已经收到的文字。
-6. 看窗口图标、任务栏图标、托盘图标、桌面快捷方式和安装包图标，应是蓝底上的大写 O。侧栏左上角仍是 OL。
-7. 故意试一次：不启动就发送、选一个不存在的名字、把端口改成正在占用的端口。页面上应有中文原因和下一步，不能变成“运行中”。
+6. 对话里点「截图」，应进入选区：框一块，点确认后附件里出现这张图；点取消或按 Esc 则不贴图。不应再直接存一整屏。
+7. 看窗口图标、任务栏图标、托盘图标、桌面快捷方式和安装包图标，应是蓝底上的大写 O。侧栏左上角仍是 OL。
+8. 托盘隐藏图标上右键，应有「退出」。点下去进程结束，而不是只把窗口藏起来。
+9. 故意试一次：不启动就发送、选一个不存在的名字、把端口改成正在占用的端口。页面上应有中文原因和下一步，不能变成“运行中”。
 
 画图、视频和 Agent 这一轮没有加新能力。没有 GPU 时画图会很慢或直接报错。没有做付费加速。
 
