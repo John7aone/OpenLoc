@@ -436,22 +436,9 @@ pub fn capture_region_file(out: &Path) -> Result<(), String> {
     }
 }
 
-/// 关窗口时：托盘常驻且不是从菜单退出，才隐藏。点「退出」必须真正结束。
-pub fn hide_on_close(tray_enabled: bool, quitting: bool) -> bool {
-    tray_enabled && !quitting
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn quit_is_not_hidden_back_into_the_tray() {
-        assert!(hide_on_close(true, false));
-        assert!(!hide_on_close(true, true));
-        assert!(!hide_on_close(false, false));
-        assert!(!hide_on_close(false, true));
-    }
 
     #[test]
     fn cancel_and_missing_file_do_not_count_as_saved() {

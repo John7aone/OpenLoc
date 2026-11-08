@@ -48,7 +48,7 @@
 <div class="seg disk"><b>硬盘</b><span id="layer-disk-t">兜底</span></div>
 </div>
 <p class="muted small" id="layer-cap">模型先放进显卡，放不下的部分再放到内存。越靠左越快。网页预览没有你的真实容量时，这三条只是分层示意。</p>
-<div class="hero-actions"><button type="button" id="hero-dl" onclick="askDownload('', this)">下载推荐量化</button><span class="muted small">大小以 Hugging Face 仓库为准，这里不预填一个假的文件体积。</span></div>
+<div class="hero-actions"><button type="button" id="hero-dl" onclick="askDownload('', this)">下载推荐量化</button><span class="muted small" id="hero-size-note">体积按参数量和量化约出来，不是仓库里的精确字节。真正下载仍要到 Hugging Face 对上文件名。</span></div>
 </div>
 <div class="specs">
 <div class="hwrows">
@@ -71,7 +71,7 @@
 
 <div id="cat" class="tab">
 <div class="sec-head"><h2>模型</h2><button type="button" onclick="importPrompt()">导入本地 GGUF</button></div>
-<p class="muted">推荐目录是公开的 GGUF 仓库，介绍是 OpenLoc 自己写的。量化下拉是你打算下载的规格；真正的文件要到仓库里对上名字才会下。</p>
+<p class="muted">推荐目录是公开的 GGUF 仓库，介绍是 OpenLoc 自己写的。量化下拉会改体积和预计速度。体积和 tok/s 都是约估，不是仓库精确字节，也不是跑分。真正的文件要到仓库里对上名字才会下。</p>
 <div class="subtabs">
 <button id="sub-rec" class="on" type="button" onclick="catTab('rec',this)">推荐模型</button>
 <button id="sub-inst" type="button" onclick="catTab('inst',this)">已安装</button>
@@ -104,7 +104,8 @@
 <div id="imgmodels"></div>
 </div>
 <div id="cat-search" style="display:none">
-<div class="searchrow"><input id="hfq" placeholder="搜索 HuggingFace 上的 GGUF 模型…"><button type="button" onclick="searchHf()">搜索</button></div>
+<div class="searchrow"><input id="hfq" placeholder="搜索 HuggingFace 上的 GGUF 模型…" onkeydown="if(event.key==='Enter'){event.preventDefault();searchHf();}"><button type="button" onclick="searchHf()">搜索</button></div>
+<p class="muted small" id="hf-note">点开仓库后，每个文件在下载按钮旁边显示体积、近 30 天仓库下载次数，以及本机 tok/s。体积是仓库文件的字节。下载次数是整个仓库的，不是单个文件。tok/s 标成「估算」，和推荐模型用同一套带宽公式，不是跑分。没有读到显卡和内存时不编速度。</p>
 <p class="search-empty" id="hfempty">输入模型名字搜索 HuggingFace 上的 GGUF 模型，例如 qwen3.8、gemma-4、glm</p>
 <div id="hfres"></div>
 </div>
@@ -154,9 +155,10 @@
 </div>
 <input class="ghost-check" type="checkbox" id="lanmode">
 <div class="statrow">
-<div class="stat"><div class="k">预计速度</div><div class="v" id="est-speed">待实测</div></div>
+<div class="stat"><div class="k">预计速度</div><div class="v" id="est-speed">待检测 / 网页预览</div></div>
 <div class="stat"><div class="k">首次加载</div><div class="v" id="est-load">约几秒到一分钟</div></div>
 </div>
+<p class="muted small" id="est-speed-note">网页预览没有硬件数据，不会编一个 tok/s。</p>
 <button id="startBtn" type="button" onclick="startRunModel()">启动模型</button>
 <button class="sec" id="stopBtn" type="button" onclick="stopRunModel()" style="display:none">停止模型</button>
 <button class="sec" id="chatBtn" type="button" onclick="tab('chat', document.querySelector('#nav [data-page=chat]'))" style="display:none">开始对话</button>
@@ -294,54 +296,162 @@
 
 <div id="settings" class="tab">
 <h2>设置</h2>
-<div class="setcard"><h3>模型存放</h3>
-<label>模型目录 <input id="modeldir" value="data/models" readonly></label>
-<p class="muted">默认在程序旁边的 data/models。改目录还没接上，已下载的模型也不会自动搬家。选择按钮在桌面版会打开这个文件夹，网页预览打不开系统窗口。</p>
-<div class="row"><button class="sec" type="button" onclick="chooseModelDir()">选择…</button><button class="sec" type="button" onclick="openModelsFolder()">打开模型文件夹</button><button class="sec" type="button" onclick="openDataFolder()">打开数据目录</button></div>
+<div class="setcard">
+<h3>模型存放</h3>
+<div class="set-field">
+<b>模型目录</b>
+<div class="field-row">
+<input id="modeldir" value="data/models" readonly>
+<button class="sec" type="button" onclick="chooseModelDir()">选择…</button>
 </div>
-<div class="setcard"><h3>界面语言</h3>
-<div class="row lang-row"><select id="langSel" onchange="saveLang(this.value)"><option value="system">跟随系统（简体中文）</option><option value="zh">简体中文</option><option value="en">English</option></select><p class="muted" id="langmsg">界面目前只有简体中文。选 English 不会假装已经翻译。</p></div>
+<p class="set-hint muted small" id="modeldir-msg">桌面版用程序旁边的 data/models。改到别的盘还没接上，已经下载的文件也不会搬家。选择只会打开当前目录。</p>
 </div>
-<div class="setcard"><h3>显卡</h3>
-<p id="gpu-info">未检测。点重新检测；网页预览读不到你的显卡。</p>
-<div class="row"><button class="sec" type="button" onclick="loadHw()">重新检测</button></div>
-<details><summary>检测不到显卡，或者显存不对？</summary><p class="muted">目前只认自动检测到的 NVIDIA 显卡。检测不到时，运行页走 CPU / 内存，不会假装有一块显卡。</p></details>
+<div class="set-field">
+<b>作品保存位置（画图 / 视频）</b>
+<div class="field-row">
+<input id="outputdir" value="data/outputs" readonly>
+<button class="sec" type="button" onclick="chooseOutputDir()">选择…</button>
 </div>
-<div class="setcard"><h3>推理引擎</h3>
-<p id="engine-info">安装和启动在运行页。聊天引擎来自 llama.cpp，画图和视频引擎来自 stable-diffusion.cpp，源码在 GitHub，许可证是 MIT。</p>
-<div class="row"><button class="sec" type="button" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页安装并启动</button></div>
-<label>聊天引擎下载地址 <input id="llamaurl" value="https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip"></label>
-<button type="button" onclick="dl('engine',document.getElementById('llamaurl').value,'llama.zip')">下载聊天引擎</button>
-<label>画图引擎下载地址 <input id="sdurl" value="https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1043/sd-master-1043-bin-win-cuda12-x64.zip"></label>
-<button type="button" onclick="dl('engine',document.getElementById('sdurl').value,'sd.zip')">下载画图引擎</button>
-<p class="muted small">默认地址是 Windows CPU 包。下载后会解压到 data/engines，找到 llama-server.exe 才算安装成功。有 NVIDIA 显卡可把地址换成 CUDA 包。网页预览点下载只会说明做不到。</p>
+<p class="set-hint muted small" id="outputdir-msg">画图和视频默认写到 data/outputs。换成别的文件夹还没接上。选择只会打开当前目录。</p>
+</div>
+</div>
+<div class="setcard">
+<h3>界面</h3>
+<div class="set-field">
+<b>界面语言</b>
+<div class="field-row lang-row">
+<select id="langSel" onchange="saveLang(this.value)">
+<option value="system">跟随系统（简体中文）</option>
+<option value="zh">简体中文</option>
+<option value="en">English</option>
+</select>
+<p class="muted small" id="langmsg">界面只有简体中文。选 English 不会翻译，也不会重新加载。</p>
+</div>
+</div>
+<div class="set-field">
+<b>外观</b>
+<div class="field-row">
+<select id="themeSel" onchange="setTheme(this.value)">
+<option value="system">跟随系统</option>
+<option value="light" selected>浅色</option>
+<option value="dark">深色</option>
+</select>
+</div>
+<p class="set-hint muted small">浅色是灰白底，深色是海军蓝底，主色是蓝。侧栏底部的太阳 / 月亮会改成对应的浅色或深色。</p>
+</div>
+</div>
+<div class="setcard">
+<h3>显卡</h3>
+<div class="gpu-row">
+<div>
+<b id="gpu-name">未检测</b>
+<p id="gpu-info">自动检测，只认 nvidia-smi。网页预览读不到显卡。</p>
+<p class="muted small" id="gpu-detected">检测到：无</p>
+</div>
+<button class="sec" type="button" onclick="loadHw()">重新检测</button>
+</div>
+</div>
+<div class="setcard">
+<h3>推理引擎</h3>
+<b class="engine-title" id="engine-title">llama.cpp · 未安装</b>
+<p class="engine-path muted small" id="engine-path">data/engines 里还没有 llama-server。</p>
+<div class="engine-actions">
+<button class="sec" type="button" onclick="useInstalledLlama()">用已有的 llama.cpp</button>
+<button class="sec" type="button" onclick="pickEngineZip()">手动导入 zip</button>
+<button type="button" onclick="updateKnownEngine()">更新到最新版</button>
+</div>
+<input id="enginezip" type="file" accept=".zip,application/zip">
+<p class="set-hint muted small">「更新到最新版」下载写死的公开包 llama.cpp b12110（Windows CPU）。不会查询比它更新的构建。「用已有的」只认 data/engines 里的 llama-server，不会全盘搜索。画图引擎仍在运行页安装。</p>
+<p class="muted" id="engine-info">网页预览看不到本机引擎。</p>
+<p class="muted" id="engine-msg"></p>
 <div id="dlmsg" class="muted"></div>
-<h3>本地 API 端口</h3>
-<label>端口 <input id="apiport" type="number" value="8080"></label>
-<button type="button" onclick="savePort()">保存端口</button>
-<p class="muted" id="portmsg">聊天服务默认跑在 127.0.0.1:8080，只限本机。被占用时请改一个空闲端口，下次启动生效。不会自动对外网开放。</p>
+<div class="set-field">
+<b>本地 API 端口</b>
+<input id="apiport" type="number" min="1" max="65535" value="8080">
+<p class="muted small" id="portmsg">聊天服务只绑定 127.0.0.1。端口被占用时请改一个空闲端口，点下方保存，下次启动才生效。不会自动往后试别的端口，也不会对局域网开放。</p>
 </div>
-<div class="setcard"><h3>关于 OpenLoc</h3>
-<p>OpenLoc 是跑在你电脑上的本地创作工坊。模型、对话和 Agent 的文件都留在本机。聊天引擎是 llama.cpp，画图和扩散视频是 stable-diffusion.cpp，许可证都是 MIT。模型权重在 Hugging Face，不随安装包附带。</p>
-<div class="row"><button class="sec" type="button" onclick="checkUpdate()">检查更新</button><button id="themeBtn2" class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="切换到深色"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3a7 7 0 0 0 11.5 11.5z"/></svg></button></div>
-<p class="muted" id="aboutmsg">这一版不连接更新服务器。要看有没有新版本，请到项目仓库。浅色是灰白底，深色是海军蓝底，主色是蓝。</p>
 </div>
-<div class="setcard"><h3>授权控制</h3>
-<p class="muted">OpenLoc 只能控制下面这些它自己的后台程序，不碰你电脑上的其他程序。哪项没勾，就不会做那件事。</p>
+<div class="setcard version-card">
+<div class="version-row">
+<div class="version-id">
+<span class="logo-mark" aria-hidden="true">OL</span>
+<div>
+<b>OpenLoc <span class="ver" id="app-version">v0.1.0</span></b>
+<div class="muted small">本地创作工坊。模型、对话和作品留在本机。</div>
+</div>
+</div>
+<div class="row">
+<button class="sec" type="button" onclick="checkUpdate()">检查更新</button>
+<button class="sec" type="button" onclick="openProjectPage()">访问项目页</button>
+</div>
+</div>
+<p class="muted small" id="aboutmsg">这一版不连接更新服务器。要看有没有新版本，请到项目仓库。</p>
+</div>
+<details class="setcard">
+<summary>高级设置</summary>
+<div class="set-field">
+<b>HuggingFace 令牌（可选）</b>
+<input id="hf-token" type="password" autocomplete="off" placeholder="hf_…">
+<p class="set-hint muted small" id="hf-token-hint">下载需要同意协议的模型时才发给 huggingface.co，或你在下面填写的镜像。不回显。留空再保存会保留已有令牌；输入一个减号再保存会清掉。</p>
+</div>
+<div class="set-field">
+<b>HuggingFace 镜像（可选）</b>
+<input id="hf-mirror" type="url" inputmode="url" placeholder="https://" autocomplete="off">
+<p class="set-hint muted small">把 huggingface.co 换成这个 https 根地址。留空就走官方。只用于免费公开下载。</p>
+</div>
+<div class="set-field">
+<b>GitHub 下载前缀（可选）</b>
+<input id="gh-prefix" type="url" inputmode="url" placeholder="https://" autocomplete="off">
+<p class="set-hint muted small">从 GitHub 下载引擎时加在公开地址前面。留空就直接访问 GitHub。这不是付费线路。</p>
+</div>
+<p class="muted small">OpenLoc 没有付费加速，也没有单独的高速下载线路。引擎和模型只从 GitHub、Hugging Face，或你自己填的 https 镜像下载。</p>
+</details>
+<div class="setcard">
+<h3>授权控制</h3>
+<p class="muted">OpenLoc 只控制它自己的后台程序。哪项没勾，就不会做那件事。</p>
 <label><input type="checkbox" id="auth-chat" checked onchange="saveAuth()"> 允许启动 / 停止聊天服务（llama-server）</label>
 <label><input type="checkbox" id="auth-img" checked onchange="saveAuth()"> 允许启动画图 / 视频引擎（sd-cli）</label>
 <label><input type="checkbox" id="auth-agent" checked onchange="saveAuth()"> 允许 Agent 在工作文件夹里跑命令</label>
 <label><input type="checkbox" id="auth-tray" checked onchange="saveAuth()"> 允许后台常驻托盘（关了，点窗口右上角 X 就直接退出程序）</label>
 <p class="muted small" id="authmsg">授权存在本机，下次打开 OpenLoc 还在。</p>
-<h4>后台程序</h4><div class="row"><button type="button" onclick="loadBackground()">刷新后台程序</button></div><div id="bglist"><p class="muted">点刷新，看 OpenLoc 现在在后台跑着哪些程序。网页预览没有这些进程。</p></div></div>
-<div class="setcard"><h3>关于加速</h3>
-<p><b>不做付费加速。</b> OpenLoc 没有付费加速通道。引擎和模型都从 GitHub / Hugging Face 免费下载，速度取决于你自己的网络。</p>
+<h4>后台程序</h4>
+<div class="row"><button class="sec" type="button" onclick="loadBackground()">刷新后台程序</button></div>
+<div id="bglist"><p class="muted">点刷新，看 OpenLoc 现在在后台跑着哪些程序。网页预览没有这些进程。</p></div>
 </div>
+<div class="setcard">
+<div class="setcard-head">
+<h3>第三方 API</h3>
+<button type="button" onclick="openApiForm()">添加 API</button>
+</div>
+<div id="api-list"></div>
+<div id="api-form" hidden>
+<label>名称 <input id="api-name" maxlength="40" autocomplete="off"></label>
+<label>模型名 <input id="api-model" maxlength="80" autocomplete="off"></label>
+<label>接口地址 <input id="api-base" type="url" inputmode="url" placeholder="https://" autocomplete="off"></label>
+<label>Key <input id="api-key" type="password" autocomplete="off"></label>
+<p class="muted small" id="api-form-hint">Key 只写在这台电脑上。编辑时留空会保留原来的 Key。</p>
+<div class="row">
+<button type="button" onclick="saveApiEntry()">保存这条</button>
+<button class="sec" type="button" onclick="closeApiForm()">取消</button>
+</div>
+<p class="muted" id="api-form-msg"></p>
+</div>
+<p class="muted" id="api-note">Key 只写在这台电脑的本地存储里，设置页不回显，也不会从这里发出去。对话和 Agent 目前只走本机 llama.cpp，顶部还不能改用这些接口。</p>
+</div>
+<div class="set-actions">
+<button type="button" onclick="saveSettings()">保存设置</button>
+<button class="sec" type="button" onclick="openDataFolder()">打开数据目录</button>
+<p class="muted" id="savemsg"></p>
+</div>
+<p class="privacy muted small">推理引擎是 llama.cpp 和 stable-diffusion.cpp（MIT）。模型和对话都保存在你的电脑上，不会上传。OpenLoc 不设账号，也不做付费加速。项目页 <a id="project-link" href="https://github.com/John7aone/OpenLoc" target="_blank" rel="noopener">github.com/John7aone/OpenLoc</a></p>
 </div>
 
 </main>
 </div>
+<script src="recommend.js"></script>
+<script src="hf-search.js"></script>
 <script src="chat-flow.js"></script>
+<script src="settings-prefs.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

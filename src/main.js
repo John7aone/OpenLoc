@@ -1,6 +1,8 @@
 // Tauri 2 withGlobalTauri: use the injected global API, no bundler needed.
 const invoke = (...args) => window.__TAURI__.core.invoke(...args);
 let catalogCache = [];
+let shownModels = [];
+let hwSnapshot = null;
 let catFilter = 'fit';
 let runCtx = 'auto';
 let webOn = false;
@@ -58,11 +60,35 @@ const LOCAL_CATALOG = [
 function localModels() {
   return LOCAL_CATALOG.map(([name, repo, params, desc, cat]) => ({ name, repo, params, desc, cat, fit: "待检测" }));
 }
-function estGb(params) {
-  const act = String(params).match(/约\s*([\d.]+)\s*B\s*激活/);
-  if (act) return parseFloat(act[1]) * 0.6 + 2;
-  const m = String(params).match(/([\d.]+)\s*B/);
-  return (m ? parseFloat(m[1]) : 8) * 0.6 + 2;
+function hardwareView() {
+  if (hwSnapshot) return hwSnapshot;
+  return OpenLocRecommend.emptyHardware(!hasTauri());
+}
+function hardwareFrom(h) {
+  return {
+    detected: true,
+    preview: false,
+    gpu: (h && h.gpu) || "",
+    vramGb: Number(h && h.gpu_vram_gb) || 0,
+    memoryTotalGb: Number(h && h.memory_total_gb) || 0,
+    memoryAvailGb: Number(h && h.memory_gb) || 0,
+    cpuCount: Number(h && h.cpu_count) || 0,
+  };
+}
+function rememberModels(list) {
+  (list || []).forEach((m) => {
+    const raw = { name: m.name, repo: m.repo, params: m.params, desc: m.desc, cat: m.cat };
+    const i = shownModels.findIndex((x) => x.repo === raw.repo);
+    if (i >= 0) shownModels[i] = raw;
+    else shownModels.push(raw);
+  });
+}
+function withView(models) {
+  const hw = hardwareView();
+  return (models || []).map((m) => {
+    const view = OpenLocRecommend.assess(m, hw, "Q4_K_M");
+    return Object.assign({}, m, { fit: view.fit, view: view });
+  });
 }
 function renderAttachments() {
   const el = document.getElementById("chat-attach");
@@ -162,20 +188,30 @@ window.tab = function(id, btn) {
   if (id === "img") refreshImgEmpty();
   if (id === "vid") refreshVidEmpty();
 };
-function normalizeTheme(v) { return (v === "dark" || v === "black") ? "dark" : "light"; }
+let themeMode = "light";
+function systemIsDark() {
+  try { return window.matchMedia("(prefers-color-scheme: dark)").matches; }
+  catch (e) { return false; }
+}
+function normalizeTheme(v) {
+  if (v === "dark" || v === "black") return "dark";
+  if (v === "system") return "system";
+  return "light";
+}
 window.toggleTheme = function() {
-  const cur = normalizeTheme(document.documentElement.getAttribute("data-theme"));
-  setTheme(cur === "dark" ? "light" : "dark");
+  const resolved = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+  setTheme(resolved === "dark" ? "light" : "dark");
 };
 window.setTheme = function(v) {
-  const theme = normalizeTheme(v);
+  themeMode = normalizeTheme(v);
+  const theme = themeMode === "system" ? (systemIsDark() ? "dark" : "light") : themeMode;
   document.documentElement.setAttribute("data-theme", theme);
+  const sel = document.getElementById("themeSel");
+  if (sel) sel.value = themeMode;
   const label = theme === "dark" ? "切换到浅色" : "切换到深色";
-  for (const id of ["themeBtn", "themeBtn2"]) {
-    const el = document.getElementById(id);
-    if (el) el.setAttribute("aria-label", label);
-  }
-  try { localStorage.setItem("openloc-theme", theme); } catch (e) {}
+  const btn = document.getElementById("themeBtn");
+  if (btn) btn.setAttribute("aria-label", label);
+  try { localStorage.setItem("openloc-theme", themeMode); } catch (e) {}
 };
 function paintLayer(known, gpu, ram, disk) {
   const bar = document.getElementById("layerbar");
@@ -200,25 +236,34 @@ window.loadHw = async function() {
   let h;
   try { h = await invoke("get_hardware"); }
   catch (e) {
+    hwSnapshot = OpenLocRecommend.emptyHardware(!hasTauri());
     markStep(false);
     paintLayer(false, "未检测", "未检测", "兜底");
-    const gs = document.getElementById("gpu-status"); if (gs) gs.textContent = "显卡状态：网页预览未检测";
+    const gs = document.getElementById("gpu-status"); if (gs) gs.textContent = hasTauri() ? "显卡状态：未检测" : "显卡状态：网页预览未检测";
     ["hw-gpu","hw-cpu","hw-mem","hw-disk"].forEach((id) => { const n = document.getElementById(id); if (n) n.textContent = "未检测"; });
     ["vram-bar","mem-bar","disk-bar"].forEach((id) => { const n = document.getElementById(id); if (n) n.style.width = "0"; });
-    const gi = document.getElementById("gpu-info");
-    if (gi) gi.textContent = "网页预览读不到显卡。桌面版会在这里显示检测到的 NVIDIA 显卡和显存；检测不到就走 CPU / 内存，不会假装有显卡。";
+    paintGpuCard(
+      "未检测到 NVIDIA 显卡",
+      hasTauri()
+        ? "自动检测，只认 nvidia-smi。这次没读到显卡，推理走 CPU / 内存，不会假装有显卡。"
+        : "自动检测，只认 nvidia-smi。网页预览读不到显卡，不会假装有显卡。",
+      "检测到：无"
+    );
     const title = document.getElementById("rec-title");
     if (title) title.textContent = "还不知道这台电脑能流畅跑多大的模型";
     const desc = document.getElementById("rec-desc");
-    if (desc) desc.textContent = "网页预览没有显存数据。桌面版按显存判断：能放进显存才标流畅，放不进就分到内存，速度会变慢。";
+    if (desc) desc.textContent = hasTauri()
+      ? "这次没读到显存和内存。读到之后才会标流畅或能跑，并约估 tok/s。现在不编一个每秒 token。"
+      : "网页预览没有显存数据。桌面版按显存判断流畅还是能跑，并约估 tok/s。这里不会编一个每秒 token。";
     loadRecommended();
     return;
   }
+  hwSnapshot = hardwareFrom(h);
   const vram = h.gpu_vram_gb || 0;
   const smooth = vram >= 16 ? 14 : vram >= 8 ? 8 : vram >= 6 ? 7 : vram >= 4 ? 4 : 2;
   markStep(true);
   document.getElementById("rec-title").textContent = "流畅运行 " + smooth + "B 以内的模型";
-  document.getElementById("rec-desc").textContent = "推荐按显存算，不是按内存算：模型能放进显存才流畅，放不进显存只能分到内存，速度会变慢。标“流畅”的才能放进你的显存。";
+  document.getElementById("rec-desc").textContent = "整份权重能放进显存才标流畅，放不进就分到内存，标能跑或较慢。卡片上的 tok/s 按显卡或内存带宽估算，不是实测。";
   document.getElementById("vram-text").textContent = vram ? vram.toFixed(1) + " GB 显存" : "未检测到独立显存，走 CPU / 内存模式";
   document.getElementById("vram-bar").style.width = vram ? Math.min(100, vram / 16 * 100) + "%" : "8%";
   document.getElementById("mem-text").textContent = h.memory_total_gb.toFixed(0) + " GB，可用 " + h.memory_gb.toFixed(0) + " GB";
@@ -238,13 +283,27 @@ window.loadHw = async function() {
   paintLayer(true, vram ? vram.toFixed(1) + " GB" : "无独立显存", h.memory_total_gb.toFixed(0) + " GB", "按需");
   const cap = document.getElementById("layer-cap");
   if (cap) cap.textContent = "模型先放进显卡，放不下的部分再放到内存。越靠左越快。条的比例按这台电脑的显存、内存和剩余磁盘来，不是某一份模型文件的切片。";
-  const gi = document.getElementById("gpu-info"); if (gi) gi.textContent = h.gpu + " · " + (vram ? vram.toFixed(1) + " GB" : "无独立显存") + "。自动检测，推理用 CUDA（N 卡）。检测不到就走 CPU / 内存。";
+  const vramText = vram ? vram.toFixed(1) + " GB" : "无独立显存";
+  paintGpuCard(
+    h.gpu + " · " + vramText,
+    "自动检测，推理用 CUDA（N 卡）。检测不到就走 CPU / 内存。",
+    "检测到：" + h.gpu + (vram ? "（" + vramText + "）" : "（无独立显存）")
+  );
   loadRecommended();
 };
+function paintGpuCard(name, info, detected) {
+  const n = document.getElementById("gpu-name");
+  const gi = document.getElementById("gpu-info");
+  const d = document.getElementById("gpu-detected");
+  if (n) n.textContent = name;
+  if (gi) gi.textContent = info;
+  if (d) d.textContent = detected;
+}
 function fitLabel(fit) {
-  if (!fit || fit === "待检测") return "待检测";
-  if (fit.startsWith("流畅")) return "流畅";
-  if (fit.startsWith("能跑")) return "能跑";
+  const s = String(fit || "");
+  if (!s || s.startsWith("待检测")) return "待检测";
+  if (s.startsWith("流畅")) return "流畅";
+  if (s.startsWith("能跑")) return "能跑";
   return "较慢";
 }
 function fitClass(fit) {
@@ -255,19 +314,53 @@ function fitClass(fit) {
   return " slow";
 }
 function cardHtml(m, feat) {
-  const quants = ["Q4_K_M（常用）", "Q5_K_M", "Q6_K", "Q8_0"];
-  return `<article class="mc${feat ? " feat-mc" : ""}"><div><div class="mtitle"><b>${escHtml(m.name)}</b>${m.cat === "看图" ? '<span class="tag">看图</span>' : ""}<span class="muted small">${escHtml(m.params)}</span></div><p class="mdesc">${escHtml(m.desc)}</p><div class="mmeta">${escHtml(m.cat)} · ${escHtml(m.repo)}</div></div><div class="right"><div class="qrow"><select class="qsel" aria-label="${escHtml(m.name)} 的量化">${quants.map((q) => `<option>${q}</option>`).join("")}</select><span class="pill-fit${fitClass(m.fit)}">${fitLabel(m.fit)}</span></div><div class="muted small">大小以仓库为准</div><button type="button" data-repo="${escHtml(m.repo)}" onclick="askDownload(this.dataset.repo, this)">下载</button></div></article>`;
+  const view = m.view || OpenLocRecommend.assess(m, hardwareView(), "Q4_K_M");
+  const quants = OpenLocRecommend.QUANTS;
+  return `<article class="mc${feat ? " feat-mc" : ""}" data-repo="${escHtml(m.repo)}"${feat ? ' data-hero="1"' : ""}><div class="mbody"><div class="mtitle"><b>${escHtml(m.name)}</b>${m.cat === "看图" ? '<span class="tag">看图</span>' : ""}</div><p class="mdesc">${escHtml(m.desc)}</p><p class="mmeta">${escHtml(view.arch)} · ${escHtml(m.cat)} · ${escHtml(m.repo)}</p><div class="mfacts"><div><span class="k">预计速度</span><b class="js-speed" title="${escHtml(view.formula)}">${escHtml(view.speedText)}</b></div><div><span class="k">放在哪</span><b class="js-place">${escHtml(view.place)}</b></div><div><span class="k">体积</span><b class="js-size">${escHtml(view.sizeText)}</b></div></div><p class="muted small js-detail">${escHtml(view.placeDetail)}</p></div><div class="right"><div class="qrow"><select class="qsel" aria-label="${escHtml(m.name)} 的量化" onchange="onQuantChange(this)">${quants.map((q) => `<option value="${q.id}">${escHtml(q.label)}</option>`).join("")}</select><span class="pill-fit js-fit${fitClass(view.fit)}">${escHtml(view.fit)}</span></div><div class="fitbar" title="${escHtml(view.barTitle)}"><span class="js-bar" style="width:${view.barPct}%"></span></div><button type="button" class="js-dl" data-repo="${escHtml(m.repo)}" onclick="askDownload(this.dataset.repo, this)">${escHtml(view.downloadText)}</button></div></article>`;
 }
-function paintHero(m) {
+function applyView(article, view) {
+  if (!article || !view) return;
+  const speed = article.querySelector(".js-speed");
+  if (speed) { speed.textContent = view.speedText; speed.title = view.formula; }
+  const place = article.querySelector(".js-place");
+  if (place) place.textContent = view.place;
+  const size = article.querySelector(".js-size");
+  if (size) size.textContent = view.sizeText;
+  const detail = article.querySelector(".js-detail");
+  if (detail) detail.textContent = view.placeDetail;
+  const fit = article.querySelector(".js-fit");
+  if (fit) { fit.textContent = view.fit; fit.className = "pill-fit js-fit" + fitClass(view.fit); }
+  const bar = article.querySelector(".js-bar");
+  if (bar) bar.style.width = view.barPct + "%";
+  const fitbar = article.querySelector(".fitbar");
+  if (fitbar) fitbar.title = view.barTitle;
+  const btn = article.querySelector(".js-dl");
+  if (btn) btn.textContent = view.downloadText;
+  if (article.dataset.hero === "1") paintHero(article.querySelector(".mtitle b") ? { name: article.querySelector(".mtitle b").textContent, repo: article.dataset.repo } : null, view);
+}
+function paintHero(m, view) {
   const chip = document.getElementById("hero-chip");
   const btn = document.getElementById("hero-dl");
   if (!m) return;
-  if (chip) chip.textContent = m.name + " · " + m.params;
-  if (btn) btn.dataset.repo = m.repo;
+  const shown = view || m.view || OpenLocRecommend.assess(m, hardwareView(), "Q4_K_M");
+  if (chip) chip.textContent = m.name + " · " + shown.sizeText + " · " + shown.speedText;
+  if (btn) {
+    btn.dataset.repo = m.repo || "";
+    btn.textContent = shown.downloadText === "下载" ? "下载推荐量化" : shown.downloadText;
+  }
 }
+window.onQuantChange = function(sel) {
+  const article = sel && sel.closest ? sel.closest("article") : null;
+  if (!article) return;
+  const repo = article.getAttribute("data-repo");
+  const m = shownModels.find((x) => x.repo === repo) || localModels().find((x) => x.repo === repo);
+  if (!m) return;
+  applyView(article, OpenLocRecommend.assess(m, hardwareView(), sel.value));
+};
 window.askDownload = async function(repo, btn) {
   if (btn && btn.dataset && btn.dataset.repo) repo = btn.dataset.repo;
-  const sel = btn && (btn.closest(".mc") || btn.closest(".hero-actions")) ? (btn.closest(".mc") || btn.parentElement).querySelector("select") : null;
+  let sel = btn && (btn.closest(".mc") || btn.closest(".hero-actions")) ? (btn.closest(".mc") || btn.parentElement).querySelector("select") : null;
+  if (!sel && btn && btn.id === "hero-dl") sel = document.querySelector('#recmodels article[data-hero="1"] select');
   const quant = ((sel && sel.value) || "Q4_K_M").replace("（常用）", "");
   if (!repo) { setActionNote("还没有可下载的推荐。先等目录出来。"); return; }
   if (!hasTauri()) {
@@ -284,8 +377,8 @@ window.askDownload = async function(repo, btn) {
   } catch (e) { setActionNote("没有开始下载：" + e); }
 };
 function totalB(params) {
-  const all = [...String(params).matchAll(/([\d.]+)\s*B/gi)].map((m) => parseFloat(m[1]));
-  return all.length ? Math.max(...all) : 99;
+  const scale = OpenLocRecommend.scaleOf(params);
+  return scale.totalB == null ? 99 : scale.totalB;
 }
 function smallerModels(models) {
   return models.filter((m) => totalB(m.params) <= 12).sort((a, b) => totalB(a.params) - totalB(b.params));
@@ -301,14 +394,33 @@ window.loadRecommended = async function() {
   let models;
   try { models = await invoke("get_catalog_with_fit"); }
   catch (e) { models = localModels(); }
+  rememberModels(models);
+  models = withView(models);
   const list = recommendList(models);
-  const judged = models.some((m) => m.fit && m.fit.startsWith("流畅"));
+  const hw = hardwareView();
+  const anySmooth = models.some((m) => m.fit === "流畅");
   const note = document.getElementById("fit-note");
   if (!list.length) { el.innerHTML = "<p class='muted'>目录是空的。</p>"; return; }
   paintHero(list[0]);
-  const head = judged ? "" : "<p class='muted small'>没有本机显存数据时，这里先列出总量约 12B 及以内的目录，标签是“待检测”，不代表已经适合你的电脑。</p>";
+  let head = "";
+  if (!hw.detected && hw.preview) head = "<p class='muted small'>网页预览没有显存数据。下面先列出总量约 12B 及以内的目录，速度写「待检测 / 网页预览」，不代表已经适合你的电脑。</p>";
+  else if (!hw.detected) head = "<p class='muted small'>还没有读到这台电脑的硬件。速度写「约估不可用」，不把目录当成已经适合你。</p>";
+  else if (!anySmooth) head = "<p class='muted small'>这些模型的整份权重放不进当前显存。下面是较小的几个，速度是约估，不是实测。</p>";
   el.innerHTML = head + list.map((m, i) => cardHtml(m, i === 0)).join("");
-  if (note && !judged) { note.hidden = false; note.textContent = "适合我的电脑：网页预览判断不了显存，筛选会暂时列出较小的模型，并标成待检测。"; }
+  if (note) {
+    if (!hw.detected) {
+      note.hidden = false;
+      note.textContent = hw.preview
+        ? "适合我的电脑：网页预览判断不了显存，筛选会暂时列出较小的模型，速度标成待检测 / 网页预览。"
+        : "适合我的电脑：硬件没读到，筛选会暂时列出较小的模型，速度标成约估不可用。";
+    } else if (!anySmooth) {
+      note.hidden = false;
+      note.textContent = "适合我的电脑：没有模型能整份放进显存。筛选列出较小的模型，并按内存判断能跑还是较慢。";
+    } else {
+      note.hidden = true;
+      note.textContent = "";
+    }
+  }
 };
 window.loadCatalog = async function() {
   const el = document.getElementById("catalog");
@@ -320,14 +432,18 @@ window.loadCatalog = async function() {
 function renderCatalog() {
   const el = document.getElementById("catalog");
   const note = document.getElementById("fit-note");
-  let list = catalogCache.slice();
+  rememberModels(catalogCache);
+  let list = withView(catalogCache.slice());
+  const hw = hardwareView();
   let explain = "";
   if (catFilter === "fit") {
-    const good = list.filter((m) => m.fit && m.fit.startsWith("流畅"));
+    const good = list.filter((m) => m.fit === "流畅");
     if (good.length) list = good;
     else {
-      list = smallerModels(list);
-      explain = "没有本机显存数据，下面只列出总量约 12B 及以内的目录，不代表已经适合你的电脑。";
+      list = withView(smallerModels(catalogCache));
+      if (!hw.detected && hw.preview) explain = "没有本机显存数据，下面只列出总量约 12B 及以内的目录，速度是待检测 / 网页预览，不代表已经适合你的电脑。";
+      else if (!hw.detected) explain = "硬件没读到，下面只列出总量约 12B 及以内的目录，速度是约估不可用。";
+      else explain = "没有模型能整份放进显存。下面列出较小的模型，能跑或较慢都是约估，不是实测。";
     }
   } else if (catFilter !== "all") list = list.filter((m) => m.cat === catFilter);
   if (note) { note.hidden = !explain; note.textContent = explain; }
@@ -360,16 +476,15 @@ window.loadInstalled = async function() {
   try {
     const list = await invoke("list_local_model_info");
     const h = await invoke("get_hardware");
+    hwSnapshot = hardwareFrom(h);
     if (tabBtn) tabBtn.textContent = "已安装（" + list.length + "）";
     const step3 = document.getElementById("step-model");
     const step3sub = document.getElementById("step-model-sub");
     if (list.length && step3) { step3.classList.add("done"); if (step3sub) step3sub.textContent = "本机已有模型"; }
     el.innerHTML = list.length ? list.map((m) => {
-      const quant = (m.name.match(/Q\d+_[A-Z0-9_]+/i) || ["—"])[0];
-      const fit = m.size_gb <= (h.gpu_vram_gb || 0) ? "流畅" : m.size_gb <= h.memory_total_gb ? "能跑" : "较慢";
-      const pct = Math.min(100, m.size_gb / Math.max(1, h.gpu_vram_gb || 8) * 100);
+      const view = estimateInstalled(m, hwSnapshot);
       const enc = encodeURIComponent(m.name);
-      return `<article class="mc"><div><div class="mtitle"><b>${escHtml(m.name)}</b><span class="pill-fit${fitClass(fit)}">${fit}</span></div><div class="mmeta">${escHtml(quant)} · ${m.size_gb.toFixed(1)} GB</div><div class="bar"><div class="fill teal" style="width:${pct}%"></div></div></div><div class="right"><div class="row"><button class="sec" type="button" onclick="openModelFolder(decodeURIComponent('${enc}'))">打开位置</button><button class="sec" type="button" onclick="delModel(decodeURIComponent('${enc}'))">删除</button><button type="button" onclick="runInstalled(decodeURIComponent('${enc}'))">运行</button></div></div></article>`;
+      return `<article class="mc"><div><div class="mtitle"><b>${escHtml(m.name)}</b><span class="pill-fit${fitClass(view.fit)}">${escHtml(view.fit)}</span></div><div class="mmeta">${escHtml(view.quant)} · ${escHtml(view.sizeText)} · ${escHtml(view.speedText)}</div><p class="muted small">${escHtml(view.place)}。${escHtml(view.placeDetail)}</p><div class="fitbar" title="${escHtml(view.barTitle)}"><span style="width:${view.barPct}%"></span></div></div><div class="right"><div class="row"><button class="sec" type="button" onclick="openModelFolder(decodeURIComponent('${enc}'))">打开位置</button><button class="sec" type="button" onclick="delModel(decodeURIComponent('${enc}'))">删除</button><button type="button" onclick="runInstalled(decodeURIComponent('${enc}'))">运行</button></div></div></article>`;
     }).join("") : "<p class='muted'>还没有已安装模型。去推荐模型下载，或在下面按完整路径导入。</p>";
   } catch (e) {
     if (tabBtn) tabBtn.textContent = "已安装";
@@ -389,14 +504,35 @@ window.openModelsFolder = async function() {
   if (!hasTauri()) { setActionNote("网页预览打不开 data/models。桌面版会打开模型目录。"); return; }
   try { await invoke("open_folder", { path: "data/models" }); } catch (e) { setActionNote("没能打开模型目录：" + e); }
 };
+window.openOutputsFolder = async function() {
+  if (!hasTauri()) { setActionNote("网页预览打不开 data/outputs。桌面版会打开作品目录。"); return; }
+  try { await invoke("open_folder", { path: "data/outputs" }); } catch (e) { setActionNote("没能打开作品目录：" + e); }
+};
 window.openDataFolder = async function() {
-  if (!hasTauri()) { setActionNote("网页预览打不开 data 目录。"); return; }
+  if (!hasTauri()) { setActionNote("网页预览打不开 data 目录。桌面版会打开数据目录。"); return; }
   try { await invoke("open_folder", { path: "data" }); } catch (e) { setActionNote("没能打开数据目录：" + e); }
 };
-window.chooseModelDir = function() { openModelsFolder(); };
+window.chooseModelDir = function() {
+  const note = "模型目录固定在 data/models，还不能改到别的盘。已下载的文件不会搬家。";
+  const el = document.getElementById("modeldir-msg");
+  if (el) el.textContent = note;
+  return openModelsFolder();
+};
+window.chooseOutputDir = function() {
+  const note = "作品目录固定在 data/outputs，还不能换成别的文件夹。";
+  const el = document.getElementById("outputdir-msg");
+  if (el) el.textContent = note;
+  return openOutputsFolder();
+};
 window.checkUpdate = function() {
   const el = document.getElementById("aboutmsg");
   if (el) el.textContent = "没有在检查更新服务器。OpenLoc 这一版不联网查版本，请到项目仓库看有没有新版本。";
+};
+window.openProjectPage = function() {
+  const url = (window.OpenLocSettings && OpenLocSettings.PROJECT_URL) || "https://github.com/John7aone/OpenLoc";
+  const opened = window.open(url, "_blank", "noopener");
+  const el = document.getElementById("aboutmsg");
+  if (!opened && el) el.textContent = "如果没有打开浏览器，请自行访问 " + url;
 };
 window.delModel = async function(name) {
   if (!hasTauri()) { setActionNote("网页预览不会删除本机文件。"); return; }
@@ -421,63 +557,178 @@ window.downloadImgPack = function(name) {
 window.searchHfName = async function(name) {
   catTab("search", document.getElementById('sub-search')); document.getElementById("hfq").value = name; searchHf();
 };
+let hfListHtml = "";
+function hfHit(raw) {
+  if (typeof raw === "string") return { id: raw, downloads: null };
+  return { id: (raw && (raw.id || raw.modelId)) || "", downloads: raw ? raw.downloads : null };
+}
+function renderHfList(hits) {
+  const repos = (hits || []).map(hfHit).filter((r) => r.id);
+  if (!repos.length) return "<p class='search-empty'>没搜到，换个词试试。</p>";
+  return repos.map((r) => {
+    const dl = OpenLocHf.formatDownloads(r.downloads);
+    const enc = encodeURIComponent(r.id);
+    return `<article class="mc hf-repo"><div class="mbody"><div class="mtitle"><b>${escHtml(r.id)}</b></div><div class="mfacts"><div><span class="k">体积</span><b>点开后显示</b></div><div><span class="k">近 30 天下载</span><b>${escHtml(dl)}</b><span class="muted small">整个仓库</span></div><div><span class="k">本机 tok/s</span><b>点开后估算</b></div></div><p class="muted small">每个量化文件的体积不一样。点开后，下载按钮旁边会写出该文件的字节、仓库下载次数，以及估算 tok/s。</p></div><div class="right"><button type="button" data-repo="${enc}" onclick="showFiles(decodeURIComponent(this.dataset.repo))">查看文件并下载</button></div></article>`;
+  }).join("");
+}
+function renderHfDetail(detail) {
+  const view = OpenLocHf.presentDetail(detail, hardwareView(), localModels());
+  const head = `<div class="hf-head"><button type="button" class="sec" onclick="showHfList()">返回搜索结果</button><b>${escHtml(view.repo)}</b><span class="muted">近 30 天仓库下载 ${escHtml(view.downloadsText)}</span></div>`;
+  if (!view.files.length) return head + "<p class='search-empty'>这个仓库里没有可下载的 GGUF 文件。</p>";
+  const rows = view.files.map((f) => {
+    const encRepo = encodeURIComponent(view.repo);
+    const encFile = encodeURIComponent(f.path);
+    const extra = f.sizeExtra ? `<span class="muted small">${escHtml(f.sizeExtra)}</span>` : "";
+    const cap = f.speedCaption ? `<span class="muted small">${escHtml(f.speedCaption)}</span>` : "";
+    return `<article class="hf-file"><div><div class="hf-name">${escHtml(f.path)}</div><div class="mfacts"><div><span class="k">体积</span><b>${escHtml(f.sizeText)}</b>${extra}</div><div><span class="k">近 30 天下载</span><b>${escHtml(f.downloadsText)}</b><span class="muted small">仓库，不是这个文件</span></div><div><span class="k">本机 tok/s</span><b class="hf-speed" title="${escHtml(f.formula)}">${escHtml(f.speedText)}</b>${cap}</div></div><p class="muted small">${escHtml(f.detail)}</p></div><div class="right"><button type="button" data-repo="${encRepo}" data-file="${encFile}" aria-label="下载 ${escHtml(f.path)}" onclick="dlCat(decodeURIComponent(this.dataset.repo), decodeURIComponent(this.dataset.file))">下载</button></div></article>`;
+  }).join("");
+  return head + `<p class="muted small">共 ${view.files.length} 个 GGUF。mmproj 不在这张表里。</p>` + rows;
+}
+window.showHfList = function() {
+  const el = document.getElementById("hfres");
+  if (el) el.innerHTML = hfListHtml || "<p class='search-empty'>还没有搜索结果。</p>";
+};
 window.searchHf = async function() {
   const el = document.getElementById("hfres");
   const empty = document.getElementById("hfempty");
   const q = document.getElementById("hfq").value.trim();
-  if (!q) { if (empty) empty.hidden = false; el.innerHTML = ""; return; }
+  if (!q) { if (empty) empty.hidden = false; el.innerHTML = ""; hfListHtml = ""; return; }
   if (empty) empty.hidden = true;
-  if (!hasTauri()) {
-    el.innerHTML = "<p class='search-empty'>网页预览不会请求 Hugging Face。桌面版会搜索「" + escHtml(q) + "」的 GGUF 仓库，搜到才列出，不会编造仓库名。</p>";
-    return;
-  }
   el.textContent = "搜索中…";
   try {
-    const repos = await invoke("search_hf", { query: q });
-    el.innerHTML = repos.length ? repos.map((r) => `<div class="mcard"><div class="mtitle"><b>${escHtml(r)}</b><button type="button" onclick="showFiles('${escHtml(r)}')">查看文件并下载</button></div></div>`).join("") : "<p class='search-empty'>没搜到，换个词试试。</p>";
-  } catch (e) { el.innerHTML = "<p class='search-empty'>没有搜到：" + escHtml(e) + "</p>"; }
+    const prefs = downloadPrefs();
+    const repos = hasTauri()
+      ? await invoke("search_hf", { query: q, hfBase: OpenLocSettings.hfApiBase(prefs.hfMirror), hfToken: prefs.hfToken })
+      : await OpenLocHf.searchPublic(q);
+    hfListHtml = renderHfList(repos);
+    el.innerHTML = hfListHtml;
+  } catch (e) { hfListHtml = ""; el.innerHTML = "<p class='search-empty'>没有搜到：" + escHtml(e) + "</p>"; }
 };
 window.showFiles = async function(repo) {
-  const el = document.getElementById("catfiles");
-  if (!hasTauri()) { if (el) el.textContent = "网页预览不会查询 " + repo + " 的文件列表。"; return; }
-  el.textContent = "查询 HuggingFace 文件列表中…";
+  const el = document.getElementById("hfres");
+  if (!el) return;
+  if (!repo) return;
+  el.innerHTML = "<p class='muted'>正在读取 " + escHtml(repo) + " 的文件体积和下载次数…</p>";
   try {
-    const files = await invoke("list_hf_files", { repo });
-    el.innerHTML = "<b>" + escHtml(repo) + "</b><br>" + files.map((f) => `${escHtml(f)} <button type="button" onclick="dlCat('${escHtml(repo)}','${escHtml(f)}')">下载</button>`).join("<br>");
-    const hf = document.getElementById("hfres"); if (hf && document.getElementById("cat-search").style.display !== "none") hf.innerHTML = el.innerHTML;
-  } catch (e) { el.textContent = "没有查到文件：" + e; }
+    const prefs = downloadPrefs();
+    const detail = hasTauri()
+      ? await invoke("hf_repo_detail", { repo, hfBase: OpenLocSettings.hfApiBase(prefs.hfMirror), hfToken: prefs.hfToken })
+      : await OpenLocHf.detailPublic(repo);
+    el.innerHTML = renderHfDetail(detail);
+  } catch (e) { el.innerHTML = "<p class='search-empty'>没有查到文件：" + escHtml(e) + "</p>"; }
 };
+function downloadPrefs() {
+  let mirror = "";
+  let prefix = "";
+  let token = "";
+  try {
+    mirror = localStorage.getItem("openloc-hf-mirror") || "";
+    prefix = localStorage.getItem("openloc-gh-prefix") || "";
+    token = localStorage.getItem("openloc-hf-token") || "";
+  } catch (e) {}
+  return { hfMirror: mirror, githubPrefix: prefix, hfToken: token };
+}
 window.dlCat = async function(repo, f) {
-  await invoke("download_file", { url: `https://huggingface.co/${repo}/resolve/main/${f}`, filename: f, kind: "model" });
-  alert("已开始下载 " + f);
+  if (!hasTauri()) {
+    setActionNote("网页预览不会下载「" + f + "」。桌面版会从 Hugging Face 拉取这个文件。");
+    return;
+  }
+  const prefs = downloadPrefs();
+  const url = OpenLocSettings.prepareDownloadUrl("https://huggingface.co/" + repo + "/resolve/main/" + f, prefs);
+  try {
+    await invoke("download_file", {
+      url: url,
+      filename: f,
+      kind: "model",
+      hfToken: prefs.hfToken,
+      tokenHost: OpenLocSettings.tokenHost(prefs.hfMirror),
+    });
+    alert("已开始下载 " + f);
+  } catch (e) { setActionNote("没有开始下载：" + e); }
 };
 window.dl = async function(kind, url, filename) {
-  const els = [document.getElementById("dlmsg"), document.getElementById("run-dlmsg")].filter(Boolean);
+  const els = [document.getElementById("dlmsg"), document.getElementById("run-dlmsg"), document.getElementById("engine-msg")].filter(Boolean);
   const say = (t) => els.forEach((el) => { el.textContent = t; });
-  if (!hasTauri()) { say("网页预览不会下载引擎。请在桌面版 OpenLoc 的运行页安装，免费，没有加速通道。"); return; }
-  try { say(await invoke("download_file", { url, filename, kind })); loadEngineStatus(); }
+  if (!hasTauri()) { say("网页预览不会下载。桌面版才会从公开地址拉取，没有付费加速。"); return; }
+  const prefs = downloadPrefs();
+  const prepared = OpenLocSettings.prepareDownloadUrl(url, prefs);
+  try {
+    say(await invoke("download_file", {
+      url: prepared,
+      filename: filename,
+      kind: kind,
+      hfToken: prefs.hfToken,
+      tokenHost: OpenLocSettings.tokenHost(prefs.hfMirror),
+    }));
+    loadEngineStatus();
+  }
   catch (e) { say("没有开始下载：" + e); }
 };
-window.dlLlama = function() { return dl("engine", document.getElementById("llamaurl").value, "llama.zip"); };
-window.dlSd = function() { return dl("engine", document.getElementById("sdurl").value, "sd.zip"); };
-window.loadEngineStatus = async function() {
+window.dlLlama = function() { return dl("engine", OpenLocSettings.LLAMA_ENGINE_URL, "llama.zip"); };
+window.dlSd = function() { return dl("engine", OpenLocSettings.SD_ENGINE_URL, "sd.zip"); };
+function engineBuildLabel(path) {
+  const build = String(path || "").match(/b\d{3,}/i);
+  return build ? ("llama.cpp " + build[0]) : "llama.cpp · 已安装";
+}
+function paintEngineCard(llama, sd, preview) {
+  const title = document.getElementById("engine-title");
+  const pathEl = document.getElementById("engine-path");
   const el = document.getElementById("engine-info");
+  if (preview) {
+    if (title) title.textContent = "llama.cpp · 未安装";
+    if (pathEl) pathEl.textContent = "网页预览看不到 data/engines 里的 llama-server。";
+    if (el) el.textContent = "安装和启动在运行页。桌面版才会真的下载公开包。";
+    return;
+  }
+  if (title) title.textContent = llama ? engineBuildLabel(llama) : "llama.cpp · 未安装";
+  if (pathEl) pathEl.textContent = llama || "data/engines 里还没有 llama-server。";
+  if (el) el.textContent = (llama ? "聊天引擎已安装。" : "聊天引擎未安装。") + (sd ? "画图引擎已安装。" : "画图引擎未安装。") + "来源是 GitHub 上的公开项目，没有付费加速。";
+}
+window.loadEngineStatus = async function() {
   const sub = document.getElementById("step-engine-sub");
   const step = document.getElementById("step-engine");
   const runInfo = document.getElementById("run-engine-info");
   try {
     const s = await invoke("engine_status");
-    if (el) el.textContent = "聊天引擎：" + (s.llama ? "已安装（" + s.llama + "）" : "未安装") + "；画图引擎：" + (s.sd ? "已安装" : "未安装") + "。安装和启动在运行页，免费，没有加速通道。";
-    if (step) step.classList.toggle("done", !!(s && s.llama));
-    if (sub) sub.textContent = s && s.llama ? "聊天引擎已安装，去运行页启动" : "还没安装，去运行页安装并启动";
-    if (runInfo) runInfo.textContent = (s && s.llama ? "聊天引擎已安装。" : "聊天引擎还没安装。") + (s && s.sd ? "画图引擎已安装。" : "画图引擎还没安装。") + "在这一页安装并启动。";
+    const llama = s && s.llama;
+    const sd = s && s.sd;
+    paintEngineCard(llama, sd, false);
+    if (step) step.classList.toggle("done", !!llama);
+    if (sub) sub.textContent = llama ? "聊天引擎已安装，去运行页启动" : "还没安装，去运行页安装并启动";
+    if (runInfo) runInfo.textContent = (llama ? "聊天引擎已安装。" : "聊天引擎还没安装。") + (sd ? "画图引擎已安装。" : "画图引擎还没安装。") + "在这一页安装并启动。";
   } catch (e) {
     if (!hasTauri()) {
-      if (el) el.textContent = "网页预览看不到本机引擎。安装和启动在运行页，桌面版才会真的下载。";
+      paintEngineCard("", "", true);
       if (sub) sub.textContent = "网页预览不能安装，去运行页看说明";
       if (runInfo) runInfo.textContent = "网页预览不会安装或启动引擎。桌面版在这一页安装 llama.cpp 和画图引擎。";
     }
   }
+};
+window.useInstalledLlama = async function() {
+  const msg = document.getElementById("engine-msg");
+  if (!hasTauri()) {
+    if (msg) msg.textContent = "网页预览看不到本机已有的 llama.cpp，也不会去全盘搜索。桌面版只认 data/engines 里的 llama-server。";
+    return;
+  }
+  await loadEngineStatus();
+  const pathEl = document.getElementById("engine-path");
+  const path = pathEl ? pathEl.textContent : "";
+  const has = path.indexOf("llama-server") >= 0 && path.indexOf("还没有") < 0 && path.indexOf("看不到") < 0;
+  if (has) {
+    if (msg) msg.textContent = "正在使用已安装的 llama-server，没有重新下载，也没有扫描其它目录。";
+    return;
+  }
+  if (msg) msg.textContent = "data/engines 里还没有 llama-server。请手动导入 zip，或安装已知的公开包。不会去全盘搜索。";
+  try { await invoke("open_folder", { path: "data/engines" }); } catch (e) {}
+};
+window.pickEngineZip = function() {
+  const input = document.getElementById("enginezip");
+  if (input) input.click();
+};
+window.updateKnownEngine = function() {
+  const msg = document.getElementById("engine-msg");
+  if (msg) msg.textContent = "将下载公开的 llama.cpp b12110 Windows CPU 包。这是仓库里写明的已知版本，不是在线查到的更新构建，也不走付费线路。";
+  return dl("engine", OpenLocSettings.LLAMA_ENGINE_URL, "llama.zip");
 };
 function isImageWeight(name) { return /\.(safetensors|ckpt)$/i.test(name || ""); }
 async function refreshMediaEmpty(which) {
@@ -605,21 +856,48 @@ window.setCtx = function(v, btn) {
   document.getElementById("ctx-now").textContent = v === 'auto' ? '自动' : (v/1024) + 'K';
   updatePlan();
 };
+function estimateInstalled(info, hw) {
+  const quant = OpenLocRecommend.inferQuant(info && info.name) || "Q4_K_M";
+  const hit = OpenLocRecommend.matchCatalog(info && info.name, localModels());
+  return OpenLocRecommend.assess({
+    name: info ? info.name : "",
+    repo: hit ? hit.repo : "",
+    params: hit ? hit.params : "",
+    desc: hit ? hit.desc : "",
+    cat: hit ? hit.cat : "",
+    sizeGb: info && info.size_gb > 0 ? info.size_gb : undefined,
+  }, hw || hardwareView(), quant);
+}
+function paintEstimate(view) {
+  const es = document.getElementById("est-speed");
+  const note = document.getElementById("est-speed-note");
+  if (!view) {
+    if (es) { es.textContent = hasTauri() ? "选中模型后约估" : "待检测 / 网页预览"; es.title = ""; }
+    if (note) note.textContent = hasTauri()
+      ? "选中已安装模型后，按显存、内存和量化约估 tok/s。这不是启动之后测到的速度。"
+      : "网页预览没有硬件数据，不会编一个 tok/s。";
+    return;
+  }
+  if (es) { es.textContent = view.speedText; es.title = view.formula; }
+  if (note) note.textContent = "和推荐卡片同一套带宽公式，不是启动之后测到的速度。";
+}
 window.updatePlan = async function() {
   const sel = document.getElementById("runmodel");
   const desc = document.getElementById("plan-desc");
   if (!sel || !sel.value) {
-    if (desc) desc.textContent = hasTauri() ? "选一个已下载模型后，这里会算它放进显存还是内存。" : "网页预览没有已安装模型。下面三条是分层示意，长度不代表你的电脑，速度也没有实测。";
-    const es = document.getElementById("est-speed"); if (es && !sel?.value) es.textContent = "待实测";
+    if (desc) desc.textContent = hasTauri() ? "选一个已下载模型后，这里会算它放进显存还是内存，并约估 tok/s。" : "网页预览没有已安装模型。下面三条是分层示意，长度不代表你的电脑，也不会编一个 tok/s。";
+    paintEstimate(null);
     return;
   }
   try {
     const list = await invoke("list_local_model_info");
     const m = list.find(x => x.name === sel.value);
     const h = await invoke("get_hardware");
-    if (!m) return;
+    if (!m) { paintEstimate(null); return; }
+    hwSnapshot = hardwareFrom(h);
+    const view = estimateInstalled(m, hwSnapshot);
     const vram = h.gpu_vram_gb || 0;
-    const fits = m.size_gb <= vram && vram > 0;
+    const fits = view.fit === "流畅";
     document.getElementById("plan-vram").textContent = "显卡 · " + h.gpu.replace("NVIDIA GeForce ", "");
     document.getElementById("plan-vram-sub").textContent = m.size_gb.toFixed(1) + " GB 模型 / " + (vram ? vram.toFixed(1) + " GB 显存" : "无独立显存");
     document.getElementById("plan-vram-bar").style.width = vram ? Math.min(100, m.size_gb / vram * 100) + "%" : "8%";
@@ -627,10 +905,14 @@ window.updatePlan = async function() {
     document.getElementById("plan-mem-bar").style.width = Math.min(100, m.size_gb / h.memory_total_gb * 100) + "%";
     const memSub = document.getElementById("plan-mem-sub"); if (memSub) memSub.textContent = fits ? "不需要" : "放不进显存的部分会到这里";
     const diskSub = document.getElementById("plan-disk-sub"); if (diskSub) diskSub.textContent = "按需读取";
-    if (desc) desc.textContent = fits ? "整个模型都能放进显存。具体每秒多少 token 要等真正跑起来，这里不预填一个速度。" : "模型放不进显存的部分会分到内存，速度会变慢。具体速度待实测。";
-    document.getElementById("est-speed").textContent = "待实测";
+    if (desc) desc.textContent = view.place + "。" + view.placeDetail;
+    paintEstimate(view);
   } catch (e) {
     if (desc) desc.textContent = "没能算出分层：" + e;
+    const es = document.getElementById("est-speed");
+    if (es) { es.textContent = "约估不可用"; es.title = ""; }
+    const note = document.getElementById("est-speed-note");
+    if (note) note.textContent = "没有拿到模型体积或硬件数据，所以不填 tok/s。";
   }
 };
 window.toggleThink = function() {
@@ -653,14 +935,22 @@ window.toggleLan = function() {
   try { localStorage.setItem("openloc-lan", on ? "1" : "0"); } catch (e) {}
 };
 function authOn(key) { try { return localStorage.getItem(key) !== "0"; } catch (e) { return true; } }
+function persistAuth() {
+  localStorage.setItem("openloc-auth-chat", document.getElementById("auth-chat").checked ? "1" : "0");
+  localStorage.setItem("openloc-auth-img", document.getElementById("auth-img").checked ? "1" : "0");
+  localStorage.setItem("openloc-auth-agent", document.getElementById("auth-agent").checked ? "1" : "0");
+  localStorage.setItem("openloc-auth-tray", document.getElementById("auth-tray").checked ? "1" : "0");
+}
 window.saveAuth = async function() {
+  const msg = document.getElementById("authmsg");
   try {
-    localStorage.setItem("openloc-auth-chat", document.getElementById("auth-chat").checked ? "1" : "0");
-    localStorage.setItem("openloc-auth-img", document.getElementById("auth-img").checked ? "1" : "0");
-    localStorage.setItem("openloc-auth-agent", document.getElementById("auth-agent").checked ? "1" : "0");
-    localStorage.setItem("openloc-auth-tray", document.getElementById("auth-tray").checked ? "1" : "0");
-    document.getElementById("authmsg").textContent = await invoke("set_tray_enabled", { enabled: document.getElementById("auth-tray").checked });
-  } catch (e) { document.getElementById("authmsg").textContent = "保存失败：" + e; }
+    persistAuth();
+    if (!hasTauri()) {
+      if (msg) msg.textContent = "授权已写在这台电脑上。网页预览不会改托盘行为。";
+      return;
+    }
+    if (msg) msg.textContent = await invoke("set_tray_enabled", { enabled: document.getElementById("auth-tray").checked });
+  } catch (e) { if (msg) msg.textContent = "授权已记下，但托盘设置没有生效：" + e; }
 };
 window.loadBackground = async function() {
   const el = document.getElementById("bglist"); el.textContent = "查询中…";
@@ -1063,29 +1353,189 @@ window.newChat = function() {
 };
 window.saveLang = function(v) {
   try { localStorage.setItem("openloc-lang", v); } catch (e) {}
-  document.getElementById("langmsg").textContent = v === "en" ? "界面目前只有简体中文，选 English 暂不翻译，下一版再做英文界面。" : "已保存：跟随系统（简体中文）。界面目前只有简体中文。";
+  const el = document.getElementById("langmsg");
+  if (!el) return;
+  el.textContent = v === "en"
+    ? "界面只有简体中文。选 English 不会翻译，也不会重新加载。"
+    : "已记下语言。界面只有简体中文，不会重新加载。";
 };
 window.savePort = function() {
-  const v = parseInt(document.getElementById("apiport").value) || 8080;
+  const v = OpenLocSettings.validPort(document.getElementById("apiport").value);
+  const el = document.getElementById("portmsg");
+  if (v == null) {
+    if (el) el.textContent = "端口无效。请填写 1 到 65535。这次没有保存。";
+    return false;
+  }
   try { localStorage.setItem("openloc-port", String(v)); } catch (e) {}
-  document.getElementById("portmsg").textContent = "已保存端口 " + v + "，下次启动聊天服务时生效。";
+  if (el) el.textContent = "已保存端口 " + v + "。下次启动聊天服务时生效，被占用时不会自动换端口。";
+  return true;
+};
+function readApis() {
+  try {
+    const raw = JSON.parse(localStorage.getItem("openloc-apis") || "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((x) => x && x.name && x.base && x.model).map((x) => ({
+      id: String(x.id || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 24),
+      name: String(x.name),
+      model: String(x.model),
+      base: String(x.base),
+      key: String(x.key || ""),
+    })).filter((x) => x.id);
+  } catch (e) { return []; }
+}
+function writeApis(list) {
+  localStorage.setItem("openloc-apis", JSON.stringify(list.map((x) => ({
+    id: x.id, name: x.name, model: x.model, base: x.base, key: x.key,
+  }))));
+}
+let apiEditId = "";
+window.renderApiList = function() {
+  const el = document.getElementById("api-list");
+  if (!el) return;
+  const list = readApis();
+  if (!list.length) {
+    el.innerHTML = "<p class='muted'>还没有第三方接口。</p>";
+    return;
+  }
+  el.innerHTML = list.map((x) => {
+    const keyNote = x.key ? "Key 已保存在本机" : "未填 Key";
+    return `<div class="api-row"><div class="api-meta"><b>${escHtml(x.name)} ${escHtml(x.model)}</b><span>${escHtml(x.base)} · ${keyNote}</span></div><div class="api-actions"><button class="sec" type="button" onclick="editApiEntry('${escHtml(x.id)}')">编辑</button><button class="sec" type="button" onclick="deleteApiEntry('${escHtml(x.id)}')">删除</button></div></div>`;
+  }).join("");
+};
+window.openApiForm = function(id) {
+  apiEditId = id || "";
+  const form = document.getElementById("api-form");
+  if (form) form.hidden = false;
+  const found = id ? readApis().find((x) => x.id === id) : null;
+  document.getElementById("api-name").value = found ? found.name : "";
+  document.getElementById("api-model").value = found ? found.model : "";
+  document.getElementById("api-base").value = found ? found.base : "";
+  document.getElementById("api-key").value = "";
+  const hint = document.getElementById("api-form-hint");
+  if (hint) hint.textContent = found && found.key ? "Key 已在本机。留空会保留，输入新的会替换。" : "Key 只写在这台电脑上。可以留空。";
+  const msg = document.getElementById("api-form-msg");
+  if (msg) msg.textContent = "";
+};
+window.closeApiForm = function() {
+  apiEditId = "";
+  const form = document.getElementById("api-form");
+  if (form) form.hidden = true;
+};
+window.editApiEntry = function(id) { openApiForm(id); };
+window.deleteApiEntry = function(id) {
+  const list = readApis();
+  const found = list.find((x) => x.id === id);
+  if (!found) return;
+  if (!confirm("删除「" + found.name + "」？Key 会一并从这台电脑清掉。对话不会因此改用别的接口。")) return;
+  writeApis(list.filter((x) => x.id !== id));
+  if (apiEditId === id) closeApiForm();
+  renderApiList();
+};
+window.saveApiEntry = function() {
+  const msg = document.getElementById("api-form-msg");
+  const draft = OpenLocSettings.normalizeApiDraft({
+    id: apiEditId,
+    name: document.getElementById("api-name").value,
+    model: document.getElementById("api-model").value,
+    base: document.getElementById("api-base").value,
+    key: document.getElementById("api-key").value,
+  });
+  if (draft.error) { if (msg) msg.textContent = draft.error; return; }
+  const list = readApis();
+  const entry = draft.entry;
+  if (!entry.id) entry.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const prev = list.find((x) => x.id === entry.id);
+  if (!entry.key && prev) entry.key = prev.key;
+  const next = prev ? list.map((x) => x.id === entry.id ? entry : x) : list.concat([entry]);
+  try { writeApis(next); } catch (e) { if (msg) msg.textContent = "没能写入本地存储：" + e; return; }
+  closeApiForm();
+  renderApiList();
+  const note = document.getElementById("api-note");
+  if (note) note.textContent = "已写在这台电脑上。对话和 Agent 目前仍只走本机 llama.cpp，顶部还不能改用这条接口。";
+};
+window.saveSettings = async function() {
+  const msg = document.getElementById("savemsg");
+  const lang = document.getElementById("langSel").value;
+  const theme = document.getElementById("themeSel").value;
+  const tokenRaw = document.getElementById("hf-token").value;
+  const clearToken = tokenRaw.trim() === "-";
+  const checked = OpenLocSettings.validatePrefs({
+    hfMirror: document.getElementById("hf-mirror").value,
+    githubPrefix: document.getElementById("gh-prefix").value,
+    hfToken: clearToken ? "" : tokenRaw,
+  });
+  if (checked.error) { if (msg) msg.textContent = checked.error; return; }
+  if (!savePort()) { if (msg) msg.textContent = "端口无效，这次没有保存。"; return; }
+  try {
+    localStorage.setItem("openloc-hf-mirror", checked.hfMirror);
+    localStorage.setItem("openloc-gh-prefix", checked.githubPrefix);
+    if (clearToken) localStorage.removeItem("openloc-hf-token");
+    else if (checked.hfToken) localStorage.setItem("openloc-hf-token", checked.hfToken);
+    document.getElementById("hf-token").value = "";
+    document.getElementById("hf-mirror").value = checked.hfMirror;
+    document.getElementById("gh-prefix").value = checked.githubPrefix;
+  } catch (e) { if (msg) msg.textContent = "没能写入本地存储：" + e; return; }
+  setTheme(theme);
+  saveLang(lang);
+  await saveAuth();
+  const tokenHint = document.getElementById("hf-token-hint");
+  if (tokenHint) {
+    tokenHint.textContent = localStorage.getItem("openloc-hf-token")
+      ? "令牌已在本机，输入框不回显。输入新的会替换，输入一个减号再保存会清掉。"
+      : "下载需要同意协议的模型时才发给 huggingface.co，或你填写的镜像。不回显。";
+  }
+  if (msg) msg.textContent = "已保存在这台电脑上。端口下次启动聊天服务时生效。镜像和前缀只用于之后的免费下载。";
 };
 (function() {
   try {
     const v = localStorage.getItem("openloc-theme") || "light"; setTheme(v);
-    const p = localStorage.getItem("openloc-port"); if (p) document.getElementById("apiport").value = p;
-    const l = localStorage.getItem("openloc-lang"); if (l) document.getElementById("langSel").value = l;
+    const p = localStorage.getItem("openloc-port"); if (p && document.getElementById("apiport")) document.getElementById("apiport").value = p;
+    const l = localStorage.getItem("openloc-lang"); if (l && document.getElementById("langSel")) document.getElementById("langSel").value = l;
+    const mirror = localStorage.getItem("openloc-hf-mirror");
+    const prefix = localStorage.getItem("openloc-gh-prefix");
+    if (mirror && document.getElementById("hf-mirror")) document.getElementById("hf-mirror").value = mirror;
+    if (prefix && document.getElementById("gh-prefix")) document.getElementById("gh-prefix").value = prefix;
+    const tokenHint = document.getElementById("hf-token-hint");
+    if (tokenHint && localStorage.getItem("openloc-hf-token")) tokenHint.textContent = "令牌已在本机，输入框不回显。输入新的会替换，输入一个减号再保存会清掉。";
     document.getElementById("auth-chat").checked = authOn("openloc-auth-chat");
     document.getElementById("auth-img").checked = authOn("openloc-auth-img");
     document.getElementById("auth-agent").checked = authOn("openloc-auth-agent");
     document.getElementById("auth-tray").checked = authOn("openloc-auth-tray");
     applyNet(localStorage.getItem("openloc-web") === "1");
     if (localStorage.getItem("openloc-lan") === "1") toggleLan();
+    renderApiList();
+  } catch (e) {}
+  try {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onScheme = function() { if (themeMode === "system") setTheme("system"); };
+    if (mq.addEventListener) mq.addEventListener("change", onScheme);
+    else if (mq.addListener) mq.addListener(onScheme);
   } catch (e) {}
   const banner = document.getElementById("preview-banner");
   if (banner && hasTauri()) banner.hidden = true;
   const file = document.getElementById("chatfile");
   if (file) file.addEventListener("change", onChatFiles);
+  const engineZip = document.getElementById("enginezip");
+  if (engineZip) engineZip.addEventListener("change", async function() {
+    const f = this.files && this.files[0];
+    const msg = document.getElementById("engine-msg");
+    this.value = "";
+    if (!f) return;
+    if (!hasTauri()) {
+      if (msg) msg.textContent = "网页预览不会导入「" + f.name + "」。桌面版才会解压本机 zip。";
+      return;
+    }
+    const path = f.path || "";
+    if (!path) {
+      if (msg) msg.textContent = "只拿到文件名「" + f.name + "」，没有完整路径，所以没有导入。";
+      return;
+    }
+    try {
+      const result = await invoke("import_engine_zip", { path: path });
+      if (msg) msg.textContent = result;
+      loadEngineStatus();
+    } catch (e) { if (msg) msg.textContent = "没有导入：" + e; }
+  });
   const importFile = document.getElementById("importfile");
   if (importFile) importFile.addEventListener("change", function() {
     const f = this.files && this.files[0];

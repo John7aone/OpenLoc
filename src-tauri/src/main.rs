@@ -113,23 +113,69 @@ fn get_hardware() -> Hardware {
     }
 }
 
+fn parse_scale(params: &str) -> Option<(f64, f64)> {
+    // 返回（总参数 B，激活参数 B）。「见仓库」不猜。
+    // tok/s 在 src/recommend.js；这里只给能不能放进显存的标签。
+    if params.is_empty() || params.contains("见仓库") {
+        return None;
+    }
+    let chars: Vec<char> = params.chars().collect();
+    let mut i = 0;
+    let mut total: Option<f64> = None;
+    let mut active: Option<f64> = None;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_ascii_digit() || (c == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                i += 1;
+            }
+            let num: String = chars[start..i].iter().collect();
+            let mut j = i;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && (chars[j] == 'B' || chars[j] == 'b') {
+                if let Ok(v) = num.parse::<f64>() {
+                    let window: String = chars[j..].iter().take(8).collect();
+                    total = Some(total.map(|t| t.max(v)).unwrap_or(v));
+                    if window.contains("激活") {
+                        active = Some(v);
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    let total = total?;
+    Some((total, active.unwrap_or(total)))
+}
+
 fn fit_hint(params: &str, mem_gb: f64, vram_gb: f64) -> String {
-    // 粗略估算：Q4 量化大约每 10 亿参数占 0.6GB，加上运行开销。
-    // 关键：能不能流畅跑，看的是显存，不是内存。模型放不进显存，
-    // 只能分到内存里跑，速度会慢很多。内存只决定“能不能跑起来”。
-    let est: f64 = params
-        .split_whitespace()
-        .next()
-        .and_then(|s| s.replace('B', "").parse::<f64>().ok())
-        .unwrap_or(4.0)
-        * 0.6
-        + 2.0;
-    if vram_gb > 0.0 && est <= vram_gb * 0.9 {
-        format!("流畅：估计约 {:.0}GB，能放进 {:.0}GB 显存", est, vram_gb)
-    } else if est <= mem_gb {
-        format!("能跑：估计约 {:.0}GB，放不进 {:.0}GB 显存，会分到内存，速度较慢", est, vram_gb)
+    // 与 src/recommend.js 的落点同一口径：Q4_K_M 按每 10 亿参数 0.56GB，
+    // 再加 0.8GB 余量。整份放进显存的 85% 才标流畅。混合专家按总参数占地方，
+    // 不按激活参数假装整份模型放得进显存。
+    let Some((total, _)) = parse_scale(params) else {
+        return "待检测：参数规模见仓库，不估算能不能放进显存".to_string();
+    };
+    let runtime = total * 0.56 + 0.8;
+    let usable = vram_gb * 0.85;
+    if vram_gb > 0.0 && runtime <= usable {
+        format!("流畅：估计约 {:.0}GB，能放进 {:.0}GB 显存", runtime, vram_gb)
+    } else if mem_gb > 0.0 && runtime <= mem_gb * 0.75 {
+        if vram_gb > 0.0 {
+            format!(
+                "能跑：估计约 {:.0}GB，放不进 {:.0}GB 显存，会分到内存",
+                runtime, vram_gb
+            )
+        } else {
+            format!("能跑：估计约 {:.0}GB，没有独立显存，放在内存", runtime)
+        }
     } else {
-        format!("不建议：估计约 {:.0}GB，你的内存可能不够", est)
+        format!("较慢：估计约 {:.0}GB，内存也可能不够", runtime)
     }
 }
 
@@ -195,36 +241,289 @@ fn get_catalog_with_fit() -> Vec<serde_json::Value> {
         .collect()
 }
 
-#[derive(Deserialize)]
-struct HfApi {
-    siblings: Option<Vec<HfSibling>>,
+const HF_UA: &str = "OpenLoc/0.1";
+
+#[derive(Serialize, Clone)]
+struct HfSearchHit {
+    id: String,
+    downloads: Option<u64>,
 }
-#[derive(Deserialize)]
-struct HfSibling {
-    rfilename: String,
+
+#[derive(Serialize, Clone)]
+struct HfFileMeta {
+    path: String,
+    size_bytes: Option<u64>,
+}
+
+#[derive(Serialize, Clone)]
+struct HfRepoDetail {
+    repo: String,
+    downloads: Option<u64>,
+    total_params: Option<u64>,
+    files: Vec<HfFileMeta>,
+}
+
+fn json_u64(v: Option<&serde_json::Value>) -> Option<u64> {
+    let value = v?;
+    if let Some(n) = value.as_u64() {
+        return Some(n);
+    }
+    let f = value.as_f64()?;
+    if f.is_finite() && f >= 0.0 && f < (u64::MAX as f64) {
+        Some(f as u64)
+    } else {
+        None
+    }
+}
+
+fn is_downloadable_gguf(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
+    name.ends_with(".gguf") && !name.starts_with("mmproj")
+}
+
+fn parse_hf_search(v: &serde_json::Value) -> Vec<HfSearchHit> {
+    let mut out = Vec::new();
+    let Some(arr) = v.as_array() else {
+        return out;
+    };
+    for m in arr {
+        let Some(id) = m.get("id").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        out.push(HfSearchHit {
+            id: id.to_string(),
+            downloads: json_u64(m.get("downloads")),
+        });
+    }
+    out
+}
+
+fn parse_hf_repo(repo: &str, v: &serde_json::Value) -> HfRepoDetail {
+    let mut files = Vec::new();
+    if let Some(arr) = v.get("siblings").and_then(|s| s.as_array()) {
+        for sib in arr {
+            let Some(path) = sib.get("rfilename").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            if !is_downloadable_gguf(path) {
+                continue;
+            }
+            let mut size = json_u64(sib.get("size"));
+            if size.is_none() {
+                size = json_u64(sib.get("lfs").and_then(|lfs| lfs.get("size")));
+            }
+            files.push(HfFileMeta {
+                path: path.to_string(),
+                size_bytes: size,
+            });
+        }
+    }
+    let total_params = json_u64(v.get("gguf").and_then(|g| g.get("total")));
+    HfRepoDetail {
+        repo: repo.to_string(),
+        downloads: json_u64(v.get("downloads")),
+        total_params,
+        files,
+    }
+}
+
+fn hf_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn fetch_hf_json(
+    url: &str,
+    token: &Option<String>,
+    token_host: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let req = hf_client()?.get(url).header("User-Agent", HF_UA);
+    let resp = apply_hf_auth(req, url, token, token_host)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.json().map_err(|e| e.to_string())
+}
+
+fn hf_model_api_url(root: &str, repo: &str) -> String {
+    let path = repo
+        .split('/')
+        .map(url_encode)
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("{root}/api/models/{path}?blobs=true")
+}
+
+fn https_host(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let hostport = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if hostport.is_empty() || hostport.contains('@') || hostport.contains(' ') || hostport.contains('[') {
+        return None;
+    }
+    let host = hostport.split(':').next().unwrap_or("");
+    if host.is_empty()
+        || host.starts_with('.')
+        || host.ends_with('.')
+        || host.contains("..")
+        || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return None;
+    }
+    Some(host.to_ascii_lowercase())
+}
+
+/// 只接受主机名，或 `https://主机` 这种根地址。带路径的值一律拒绝。
+fn normalize_token_host(raw: &str) -> Option<String> {
+    let t = raw.trim().trim_end_matches('/');
+    if t.is_empty() {
+        return None;
+    }
+    if t.starts_with("https://") {
+        let rest = t.trim_start_matches("https://");
+        if rest.contains('/') || rest.contains('?') || rest.contains('#') {
+            return None;
+        }
+        return https_host(t);
+    }
+    if t.contains('/') || t.contains(':') || t.contains('@') {
+        return None;
+    }
+    https_host(&format!("https://{t}"))
+}
+
+fn should_attach_hf_token(url: &str, token_host: Option<&str>) -> bool {
+    let Some(host) = https_host(url) else {
+        return false;
+    };
+    if host == "huggingface.co" || host.ends_with(".huggingface.co") {
+        return true;
+    }
+    match token_host.and_then(normalize_token_host) {
+        Some(allowed) if allowed == host => true,
+        _ => false,
+    }
+}
+
+fn clean_hf_token(raw: Option<String>) -> Result<Option<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    if t.len() > 512 || t.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("HuggingFace 令牌格式不对，这次没有带上它。".to_string());
+    }
+    Ok(Some(t.to_string()))
+}
+
+fn hf_api_root(hf_base: &Option<String>) -> Result<String, String> {
+    let raw = hf_base.as_deref().unwrap_or("").trim();
+    if raw.is_empty() {
+        return Ok("https://huggingface.co".to_string());
+    }
+    match normalize_token_host(raw) {
+        Some(host) => Ok(format!("https://{host}")),
+        None => Err(
+            "HuggingFace 镜像必须是 https 网站根地址，不能带路径或账号。留空则走官方 huggingface.co。"
+                .to_string(),
+        ),
+    }
+}
+
+fn form_escape(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn repo_ok(repo: &str) -> bool {
+    !repo.is_empty()
+        && repo.len() <= 200
+        && !repo.contains("..")
+        && repo.matches('/').count() == 1
+        && !repo.starts_with('/')
+        && !repo.ends_with('/')
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/')
+}
+
+fn apply_hf_auth(
+    req: reqwest::blocking::RequestBuilder,
+    url: &str,
+    token: &Option<String>,
+    token_host: Option<&str>,
+) -> reqwest::blocking::RequestBuilder {
+    if let Some(tok) = token {
+        if should_attach_hf_token(url, token_host) {
+            return req.header("Authorization", format!("Bearer {tok}"));
+        }
+    }
+    req
+}
+
+fn load_hf_repo(
+    repo: &str,
+    hf_base: Option<String>,
+    hf_token: Option<String>,
+) -> Result<HfRepoDetail, String> {
+    if !repo_ok(repo) {
+        return Err("仓库名不对。应是 组织/仓库 这种形式。".to_string());
+    }
+    let root = hf_api_root(&hf_base)?;
+    let token = clean_hf_token(hf_token)?;
+    let url = hf_model_api_url(&root, repo);
+    let api = fetch_hf_json(&url, &token, Some(root.as_str()))
+        .map_err(|e| format!("查询文件失败：{e}"))?;
+    Ok(parse_hf_repo(repo, &api))
 }
 
 #[tauri::command]
-fn list_hf_files(repo: String) -> Result<Vec<String>, String> {
-    let url = format!("https://huggingface.co/api/models/{}", repo);
-    let resp = reqwest::blocking::Client::new()
-        .get(&url)
-        .header("User-Agent", "FreeLocalAI/2.0")
-        .send()
-        .map_err(|e| e.to_string())?;
-    let api: HfApi = resp.json().map_err(|e| e.to_string())?;
-    Ok(api
-        .siblings
-        .unwrap_or_default()
+fn list_hf_files(
+    repo: String,
+    hf_base: Option<String>,
+    hf_token: Option<String>,
+) -> Result<Vec<String>, String> {
+    Ok(load_hf_repo(&repo, hf_base, hf_token)?
+        .files
         .into_iter()
-        .map(|s| s.rfilename)
-        .filter(|f| f.to_lowercase().ends_with(".gguf") && !f.to_lowercase().starts_with("mmproj"))
+        .map(|f| f.path)
         .collect())
+}
+
+#[tauri::command]
+fn hf_repo_detail(
+    repo: String,
+    hf_base: Option<String>,
+    hf_token: Option<String>,
+) -> Result<HfRepoDetail, String> {
+    load_hf_repo(&repo, hf_base, hf_token)
 }
 
 // ---------- 下载（断点续传，416 视为已完成） ----------
 #[tauri::command]
-fn download_file(url: String, filename: String, kind: String) -> Result<String, String> {
+fn download_file(
+    url: String,
+    filename: String,
+    kind: String,
+    hf_token: Option<String>,
+    token_host: Option<String>,
+) -> Result<String, String> {
     ensure_dirs();
     let dir = if kind == "model" { models_dir() } else { engines_dir() };
     let _ = fs::create_dir_all(&dir);
@@ -233,8 +532,10 @@ fn download_file(url: String, filename: String, kind: String) -> Result<String, 
     if dest.exists() {
         start = fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
     }
+    let token = clean_hf_token(hf_token)?;
     let client = reqwest::blocking::Client::new();
     let mut req = client.get(&url).header("User-Agent", "FreeLocalAI/2.0");
+    req = apply_hf_auth(req, &url, &token, token_host.as_deref());
     if start > 0 {
         req = req.header("Range", format!("bytes={}-", start));
     }
@@ -268,6 +569,55 @@ fn download_file(url: String, filename: String, kind: String) -> Result<String, 
         let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o755));
     }
     finalize_download(&dest, &filename, &kind)
+}
+
+fn import_stem(name: &str) -> String {
+    let lower = name.to_lowercase();
+    let stem = lower.strip_suffix(".zip").unwrap_or(&lower);
+    let mut out = String::new();
+    for c in stem.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+        if out.len() >= 80 {
+            break;
+        }
+    }
+    let out = out.trim_matches('.').to_string();
+    if out.is_empty() { "engine".to_string() } else { out }
+}
+
+#[tauri::command]
+fn import_engine_zip(path: String) -> Result<String, String> {
+    let src = PathBuf::from(path.trim());
+    if !src.is_file() {
+        return Err("路径不存在或不是文件。下一步：在桌面版选择本机上的 zip。".to_string());
+    }
+    let name = src.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    if !name.to_lowercase().ends_with(".zip") {
+        return Err("只接受 .zip。下一步：选择 llama.cpp 或 stable-diffusion.cpp 的可执行包。".to_string());
+    }
+    ensure_dirs();
+    let stem = import_stem(&name);
+    let dir = engines_dir().join("manual").join(&stem);
+    let dest_zip = engines_dir().join("manual").join(format!("{stem}.zip"));
+    if let Some(parent) = dest_zip.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("无法创建引擎目录：{e}"))?;
+    }
+    fs::copy(&src, &dest_zip).map_err(|e| format!("复制压缩包失败：{e}"))?;
+    engine_io::extract_zip(&dest_zip, &dir)?;
+    let llama = engine_io::find_named_binary(&dir, &["llama-server", "llama-server.exe"]);
+    let sd = engine_io::find_named_binary(&dir, &["sd-cli", "sd-cli.exe", "sd-server", "sd-server.exe"]);
+    match (llama, sd) {
+        (Some(found), _) => Ok(format!("聊天引擎已导入，找到 {}", found.display())),
+        (None, Some(found)) => Ok(format!("画图引擎已导入，找到 {}", found.display())),
+        (None, None) => Err(
+            "压缩包已解压，但里面没有 llama-server 或 sd-cli。下一步：确认这是可执行包，不是源码包。"
+                .to_string(),
+        ),
+    }
 }
 
 #[tauri::command]
@@ -822,15 +1172,21 @@ fn delete_model(name: String) -> Result<String, String> {
     Ok(format!("已删除 {}", name))
 }
 #[tauri::command]
-fn search_hf(query: String) -> Result<Vec<String>, String> {
-    let url = format!("https://huggingface.co/api/models?search={}&limit=20&filter=gguf", query);
-    let resp = reqwest::blocking::get(&url).map_err(|e| e.to_string())?;
-    let v: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    if let Some(arr) = v.as_array() {
-        for m in arr { if let Some(id) = m.get("id").and_then(|x| x.as_str()) { out.push(id.to_string()); } }
+fn search_hf(
+    query: String,
+    hf_base: Option<String>,
+    hf_token: Option<String>,
+) -> Result<Vec<HfSearchHit>, String> {
+    let root = hf_api_root(&hf_base)?;
+    let token = clean_hf_token(hf_token)?;
+    let q = form_escape(query.trim());
+    if q.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(out)
+    let url = format!("{root}/api/models?search={q}&limit=20&filter=gguf");
+    let v = fetch_hf_json(&url, &token, Some(root.as_str()))
+        .map_err(|e| format!("搜索失败：{e}"))?;
+    Ok(parse_hf_search(&v))
 }
 #[tauri::command]
 fn list_local_model_info() -> Vec<serde_json::Value> {
@@ -888,7 +1244,7 @@ fn web_search(query: String) -> Result<String, String> {
     if results.is_empty() { Ok("没搜到相关结果，请换个词再试。".to_string()) } else { Ok(results.join("\n\n")) }
 }
 
-// ---------- 对话截图：只收用户确认的选区，不收整屏 ----------
+// ---------- 截屏：只保存用户确认的选区。取消不写整屏，也不进附件 ----------
 #[derive(Serialize)]
 struct ChatShot {
     path: String,
@@ -1128,6 +1484,164 @@ fn fallback_o_icon() -> tauri::image::Image<'static> {
     tauri::image::Image::new_owned(rgba, N, N)
 }
 
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn small_model_fits_8gb() {
+        let hint = fit_hint("4B", 32.0, 8.0);
+        assert!(hint.starts_with("流畅"), "{hint}");
+        let hint = fit_hint("E4B（高效小模型）", 32.0, 8.0);
+        assert!(hint.starts_with("流畅"), "{hint}");
+    }
+
+    #[test]
+    fn moe_uses_total_params_for_vram() {
+        let hint = fit_hint("35B 总量 / 约 3B 激活", 32.0, 8.0);
+        assert!(hint.starts_with("能跑"), "{hint}");
+        assert!(!hint.contains("流畅"));
+        let huge = fit_hint("180B 总量 / 约 6B 激活", 32.0, 8.0);
+        assert!(huge.starts_with("较慢"), "{huge}");
+    }
+
+    #[test]
+    fn unknown_scale_is_not_a_guess() {
+        let hint = fit_hint("见仓库（Flash 系列）", 32.0, 8.0);
+        assert!(hint.starts_with("待检测"), "{hint}");
+    }
+
+    #[test]
+    fn cpu_only_can_still_run_a_small_model() {
+        let hint = fit_hint("4B", 16.0, 0.0);
+        assert!(hint.starts_with("能跑"), "{hint}");
+        assert!(hint.contains("内存"));
+    }
+}
+
+#[cfg(test)]
+mod settings_net_tests {
+    use super::*;
+
+    #[test]
+    fn hf_token_stays_off_other_hosts() {
+        assert!(!should_attach_hf_token(
+            "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama.zip",
+            Some("mirror.example")
+        ));
+        assert!(!should_attach_hf_token(
+            "https://proxy.example/https://github.com/ggml-org/llama.cpp/x.zip",
+            Some("https://mirror.example")
+        ));
+        assert!(!should_attach_hf_token(
+            "https://evil.example/org/repo",
+            Some("https://mirror.example/extra")
+        ));
+    }
+
+    #[test]
+    fn hf_token_attaches_to_official_and_chosen_mirror() {
+        assert!(should_attach_hf_token(
+            "https://huggingface.co/org/repo/resolve/main/model.gguf",
+            None
+        ));
+        assert!(should_attach_hf_token(
+            "https://mirror.example/org/repo/resolve/main/model.gguf",
+            Some("https://mirror.example")
+        ));
+        assert!(!should_attach_hf_token("http://huggingface.co/org/repo", None));
+    }
+
+    #[test]
+    fn bad_token_is_rejected_and_blank_is_absent() {
+        assert!(clean_hf_token(Some("hf_ok".into())).unwrap().is_some());
+        assert!(clean_hf_token(Some("  ".into())).unwrap().is_none());
+        assert!(clean_hf_token(Some("bad token".into())).is_err());
+        assert!(clean_hf_token(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn mirror_root_only() {
+        assert_eq!(hf_api_root(&None).unwrap(), "https://huggingface.co");
+        assert_eq!(
+            hf_api_root(&Some("https://mirror.example".into())).unwrap(),
+            "https://mirror.example"
+        );
+        assert!(hf_api_root(&Some("http://mirror.example".into())).is_err());
+        assert!(hf_api_root(&Some("https://mirror.example/path".into())).is_err());
+    }
+
+    #[test]
+    fn import_stem_drops_odd_characters() {
+        assert_eq!(import_stem("llama-b12110.zip"), "llama-b12110");
+        assert_eq!(import_stem("../sneaky.zip"), "_sneaky");
+        assert_eq!(import_stem("..zip"), "engine");
+    }
+}
+
+#[cfg(test)]
+mod hf_meta_tests {
+    use super::*;
+
+    #[test]
+    fn search_hits_keep_id_and_month_downloads() {
+        let v = serde_json::json!([
+            {"id": "unsloth/Qwen3.8-Flash-Next-GGUF", "downloads": 1423501},
+            {"id": "org/no-count"},
+            {"downloads": 3},
+            {"id": ""}
+        ]);
+        let hits = parse_hf_search(&v);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].id, "unsloth/Qwen3.8-Flash-Next-GGUF");
+        assert_eq!(hits[0].downloads, Some(1_423_501));
+        assert_eq!(hits[1].id, "org/no-count");
+        assert_eq!(hits[1].downloads, None);
+    }
+
+    #[test]
+    fn model_files_use_sibling_size_skip_mmproj_and_keep_param_count() {
+        let v = serde_json::json!({
+            "downloads": 10,
+            "gguf": {"total": 4_000_000_000u64, "totalFileSize": 999},
+            "siblings": [
+                {"rfilename": "mmproj-BF16.gguf", "size": 100},
+                {"rfilename": "Q4_K_M/model-Q4_K_M.gguf", "size": 2_500_000_000u64},
+                {"rfilename": "BF16/a-00001-of-00002.gguf", "lfs": {"size": 11}},
+                {"rfilename": "README.md", "size": 12},
+                {"rfilename": "nested/mmproj-model.gguf", "size": 8}
+            ]
+        });
+        let d = parse_hf_repo("org/name", &v);
+        assert_eq!(d.repo, "org/name");
+        assert_eq!(d.downloads, Some(10));
+        assert_eq!(d.total_params, Some(4_000_000_000));
+        assert_eq!(d.files.len(), 2);
+        assert_eq!(d.files[0].path, "Q4_K_M/model-Q4_K_M.gguf");
+        assert_eq!(d.files[0].size_bytes, Some(2_500_000_000));
+        assert_eq!(d.files[1].path, "BF16/a-00001-of-00002.gguf");
+        assert_eq!(d.files[1].size_bytes, Some(11));
+    }
+}
+
+/// 关窗口时：托盘常驻且不是从菜单退出，才隐藏。点「退出」必须真正结束。
+fn hide_on_close(tray_enabled: bool, quitting: bool) -> bool {
+    tray_enabled && !quitting
+}
+
+#[cfg(test)]
+mod tray_tests {
+    use super::hide_on_close;
+
+    #[test]
+    fn quit_is_not_hidden_back_into_the_tray() {
+        assert!(hide_on_close(true, false));
+        assert!(!hide_on_close(true, true));
+        assert!(!hide_on_close(false, false));
+        assert!(!hide_on_close(false, true));
+    }
+}
+
 fn main() {
     ensure_dirs();
     tauri::Builder::default()
@@ -1145,7 +1659,9 @@ fn main() {
             get_catalog,
             get_catalog_with_fit,
             list_hf_files,
+            hf_repo_detail,
             download_file,
+            import_engine_zip,
             list_local_models,
             import_model,
             start_chat,
@@ -1234,7 +1750,7 @@ fn main() {
                 let state = window.state::<AppState>();
                 let quitting = state.quitting.load(Ordering::SeqCst);
                 let tray_on = state.tray_enabled.lock().map(|v| *v).unwrap_or(true);
-                if region_shot::hide_on_close(tray_on, quitting) {
+                if hide_on_close(tray_on, quitting) {
                     let _ = window.hide();
                     api.prevent_close();
                 }
