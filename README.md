@@ -82,6 +82,45 @@ python3 -m http.server 8753
 
 程序所在目录旁的 `data/` 文件夹：`data/engines/`（引擎）、`data/models/`（模型）、`data/outputs/`（生成的图片和视频）。
 
-## 没验证过的部分（实话）
+## 本机聊天闭环
 
-这次收的是界面路径。1280×800 的走查用浏览器打开 `src/index.html`，因为当前环境没有 WebKitGTK，`npm run tauri dev` 没有编出桌面窗口。Windows 安装包仍走 GitHub Actions。画图出图和 Wan 扩散视频需要有显卡的 Windows 电脑验证，没有 GPU 会很慢或直接报错。没有做付费加速，也没有改 Agent 的安全边界。
+安装聊天引擎会把 zip 解压到 `data/engines/llama/`，找到 `llama-server` 或 `llama-server.exe` 才算装好。启动时命令行固定 `--host 127.0.0.1`，健康检查要看到 `{"status":"ok"}` 才把状态标成运行中。对话发到这个本机端口；联网开关默认关，打开后才检索，失败会说明原因。截图和附件只留在本机，纯文本模型看不到图片内容。
+
+服务没启动、模型不在 `data/models`、端口被占用、请求失败，都会用中文写明原因和下一步，不会把状态标成已经在跑。生成过程中可以停止，已经收到的文字会留下。
+
+## 在这台开发环境里实际跑过的
+
+命令和结果分开记。mock 不代表真的推理。
+
+```bash
+node --test test/chat-flow.test.mjs
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+在准备这次提交的 Linux 环境里，`node --test test/chat-flow.test.mjs` 为 8 通过，`cargo test --manifest-path src-tauri/Cargo.toml` 为 18 通过。其中 2 项真实模型测试在没有 `OPENLOC_LIVE_PORT` 时直接返回，不访问网络。另一次 `OPENLOC_LIVE_PORT=18080 cargo test --manifest-path src-tauri/Cargo.toml live_model` 走了下面的真模型。Rust 侧用本机假 HTTP 服务覆盖：健康检查只有 `status=ok` 才算就绪、端口占用、非流式回复、思考字段被拒绝后重试、流式中途取消。解压测试按 Windows CPU 包的布局放了根目录上的 `llama-server.exe`，并拒绝路径穿越。
+
+另一次真实推理（不是 mock）：llama.cpp `b12110` 的 Ubuntu x64 CPU 包，模型 `stories15M-q4_0.gguf`（约 19MB，公开小模型）。命令行测试里 `llama-server` 监听 `127.0.0.1:18080`，`/health` 返回 ok。经 OpenLoc 的请求函数拿到非空回复，非流式开头是 “Suddenled the ground…”，流式开头是 “Sisss are very icy windows…”。同一套引擎和模型也在 Linux 桌面窗口里走过：运行页显示“健康检查已通过”和 `127.0.0.1:8080`，联网开关保持关闭，对话页收到以 “Suddenled her feet…” 开头的回复。限制：这是 TinyStories 小模型，不会按指令回答；训练上下文只有 128，引擎把更长的上下文截断了；跑在 Linux CPU 上，不能当成 Windows 或显卡结果。没有下载更大的模型，也没有调用收费 API。
+
+## 没在 Windows 真机上验证
+
+这个环境不能打出 Windows 安装包，也没有在 Windows 电脑上双击运行过。下面的步骤是给 Windows 用户自己验证的，不是“已经通过”的记录。公开仓库上的 `Build Windows` 使用 GitHub 托管的标准 `windows-latest`，没有加大权限，也没有开付费 runner。安装包如果打出来了，在该次 Actions 运行的 Artifacts 里，名字是 `openloc-windows`。过期或运行失败就没有可下载的包。
+
+Windows 上建议这样试：
+
+1. 安装 Rust（https://rustup.rs）和 Node.js 18+，或者等上面的 Actions 产物。本地打包：
+
+```bat
+npm install
+python src-tauri/icons/generate-icon.py
+npx @tauri-apps/cli icon src-tauri/icons/icon.png
+npm run tauri build
+```
+
+产物在 `src-tauri/target/release/bundle/`。
+2. 打开程序，停在概览。到「运行」页点「安装聊天引擎」。默认地址是 llama.cpp `b12110` 的 Windows CPU zip。装好后应看到“找到 llama-server”。
+3. 到「模型」页下载一个小的 GGUF，或在「已安装」里按完整路径导入。先不要下特别大的仓库。
+4. 回到「运行」页选中这个文件，点「启动模型」。只有健康检查通过才显示运行中，地址是 `http://127.0.0.1:端口/v1`。
+5. 到「对话」页发一句话。联网开关保持关闭。回复应来自本机。点停止应留下已经收到的文字。
+6. 故意试一次：不启动就发送、选一个不存在的名字、把端口改成正在占用的端口。页面上应有中文原因和下一步，不能变成“运行中”。
+
+画图、视频和 Agent 这一轮没有加新能力。没有 GPU 时画图会很慢或直接报错。没有做付费加速。

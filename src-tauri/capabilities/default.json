@@ -1,0 +1,19 @@
+{
+  "identifier": "default",
+  "description": "主窗口可以接收本机聊天事件。开发时页面在 1420 端口，打包后走本地窗口。",
+  "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://localhost:1420",
+      "http://localhost:1420/*",
+      "http://127.0.0.1:1420",
+      "http://127.0.0.1:1420/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
