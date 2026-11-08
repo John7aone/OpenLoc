@@ -248,14 +248,136 @@ struct HfSibling {
     rfilename: String,
 }
 
+fn https_host(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let hostport = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if hostport.is_empty() || hostport.contains('@') || hostport.contains(' ') || hostport.contains('[') {
+        return None;
+    }
+    let host = hostport.split(':').next().unwrap_or("");
+    if host.is_empty()
+        || host.starts_with('.')
+        || host.ends_with('.')
+        || host.contains("..")
+        || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return None;
+    }
+    Some(host.to_ascii_lowercase())
+}
+
+/// 只接受主机名，或 `https://主机` 这种根地址。带路径的值一律拒绝。
+fn normalize_token_host(raw: &str) -> Option<String> {
+    let t = raw.trim().trim_end_matches('/');
+    if t.is_empty() {
+        return None;
+    }
+    if t.starts_with("https://") {
+        let rest = t.trim_start_matches("https://");
+        if rest.contains('/') || rest.contains('?') || rest.contains('#') {
+            return None;
+        }
+        return https_host(t);
+    }
+    if t.contains('/') || t.contains(':') || t.contains('@') {
+        return None;
+    }
+    https_host(&format!("https://{t}"))
+}
+
+fn should_attach_hf_token(url: &str, token_host: Option<&str>) -> bool {
+    let Some(host) = https_host(url) else {
+        return false;
+    };
+    if host == "huggingface.co" || host.ends_with(".huggingface.co") {
+        return true;
+    }
+    match token_host.and_then(normalize_token_host) {
+        Some(allowed) if allowed == host => true,
+        _ => false,
+    }
+}
+
+fn clean_hf_token(raw: Option<String>) -> Result<Option<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    if t.len() > 512 || t.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("HuggingFace 令牌格式不对，这次没有带上它。".to_string());
+    }
+    Ok(Some(t.to_string()))
+}
+
+fn hf_api_root(hf_base: &Option<String>) -> Result<String, String> {
+    let raw = hf_base.as_deref().unwrap_or("").trim();
+    if raw.is_empty() {
+        return Ok("https://huggingface.co".to_string());
+    }
+    match normalize_token_host(raw) {
+        Some(host) => Ok(format!("https://{host}")),
+        None => Err(
+            "HuggingFace 镜像必须是 https 网站根地址，不能带路径或账号。留空则走官方 huggingface.co。"
+                .to_string(),
+        ),
+    }
+}
+
+fn form_escape(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn repo_ok(repo: &str) -> bool {
+    !repo.is_empty()
+        && repo.len() <= 200
+        && !repo.contains("..")
+        && repo.matches('/').count() == 1
+        && !repo.starts_with('/')
+        && !repo.ends_with('/')
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/')
+}
+
+fn apply_hf_auth(
+    req: reqwest::blocking::RequestBuilder,
+    url: &str,
+    token: &Option<String>,
+    token_host: Option<&str>,
+) -> reqwest::blocking::RequestBuilder {
+    if let Some(tok) = token {
+        if should_attach_hf_token(url, token_host) {
+            return req.header("Authorization", format!("Bearer {tok}"));
+        }
+    }
+    req
+}
+
 #[tauri::command]
-fn list_hf_files(repo: String) -> Result<Vec<String>, String> {
-    let url = format!("https://huggingface.co/api/models/{}", repo);
-    let resp = reqwest::blocking::Client::new()
-        .get(&url)
-        .header("User-Agent", "FreeLocalAI/2.0")
-        .send()
-        .map_err(|e| e.to_string())?;
+fn list_hf_files(repo: String, hf_base: Option<String>, hf_token: Option<String>) -> Result<Vec<String>, String> {
+    if !repo_ok(&repo) {
+        return Err("仓库名不对。应是 组织/仓库 这种形式。".to_string());
+    }
+    let root = hf_api_root(&hf_base)?;
+    let token = clean_hf_token(hf_token)?;
+    let url = format!("{root}/api/models/{repo}");
+    let client = reqwest::blocking::Client::new();
+    let req = client.get(&url).header("User-Agent", "FreeLocalAI/2.0");
+    let req = apply_hf_auth(req, &url, &token, Some(root.as_str()));
+    let resp = req.send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("查询文件失败：HTTP {}", resp.status()));
+    }
     let api: HfApi = resp.json().map_err(|e| e.to_string())?;
     Ok(api
         .siblings
@@ -268,7 +390,13 @@ fn list_hf_files(repo: String) -> Result<Vec<String>, String> {
 
 // ---------- 下载（断点续传，416 视为已完成） ----------
 #[tauri::command]
-fn download_file(url: String, filename: String, kind: String) -> Result<String, String> {
+fn download_file(
+    url: String,
+    filename: String,
+    kind: String,
+    hf_token: Option<String>,
+    token_host: Option<String>,
+) -> Result<String, String> {
     ensure_dirs();
     let dir = if kind == "model" { models_dir() } else { engines_dir() };
     let _ = fs::create_dir_all(&dir);
@@ -277,8 +405,10 @@ fn download_file(url: String, filename: String, kind: String) -> Result<String, 
     if dest.exists() {
         start = fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
     }
+    let token = clean_hf_token(hf_token)?;
     let client = reqwest::blocking::Client::new();
     let mut req = client.get(&url).header("User-Agent", "FreeLocalAI/2.0");
+    req = apply_hf_auth(req, &url, &token, token_host.as_deref());
     if start > 0 {
         req = req.header("Range", format!("bytes={}-", start));
     }
@@ -312,6 +442,55 @@ fn download_file(url: String, filename: String, kind: String) -> Result<String, 
         let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o755));
     }
     finalize_download(&dest, &filename, &kind)
+}
+
+fn import_stem(name: &str) -> String {
+    let lower = name.to_lowercase();
+    let stem = lower.strip_suffix(".zip").unwrap_or(&lower);
+    let mut out = String::new();
+    for c in stem.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+        if out.len() >= 80 {
+            break;
+        }
+    }
+    let out = out.trim_matches('.').to_string();
+    if out.is_empty() { "engine".to_string() } else { out }
+}
+
+#[tauri::command]
+fn import_engine_zip(path: String) -> Result<String, String> {
+    let src = PathBuf::from(path.trim());
+    if !src.is_file() {
+        return Err("路径不存在或不是文件。下一步：在桌面版选择本机上的 zip。".to_string());
+    }
+    let name = src.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    if !name.to_lowercase().ends_with(".zip") {
+        return Err("只接受 .zip。下一步：选择 llama.cpp 或 stable-diffusion.cpp 的可执行包。".to_string());
+    }
+    ensure_dirs();
+    let stem = import_stem(&name);
+    let dir = engines_dir().join("manual").join(&stem);
+    let dest_zip = engines_dir().join("manual").join(format!("{stem}.zip"));
+    if let Some(parent) = dest_zip.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("无法创建引擎目录：{e}"))?;
+    }
+    fs::copy(&src, &dest_zip).map_err(|e| format!("复制压缩包失败：{e}"))?;
+    engine_io::extract_zip(&dest_zip, &dir)?;
+    let llama = engine_io::find_named_binary(&dir, &["llama-server", "llama-server.exe"]);
+    let sd = engine_io::find_named_binary(&dir, &["sd-cli", "sd-cli.exe", "sd-server", "sd-server.exe"]);
+    match (llama, sd) {
+        (Some(found), _) => Ok(format!("聊天引擎已导入，找到 {}", found.display())),
+        (None, Some(found)) => Ok(format!("画图引擎已导入，找到 {}", found.display())),
+        (None, None) => Err(
+            "压缩包已解压，但里面没有 llama-server 或 sd-cli。下一步：确认这是可执行包，不是源码包。"
+                .to_string(),
+        ),
+    }
 }
 
 #[tauri::command]
@@ -866,9 +1045,21 @@ fn delete_model(name: String) -> Result<String, String> {
     Ok(format!("已删除 {}", name))
 }
 #[tauri::command]
-fn search_hf(query: String) -> Result<Vec<String>, String> {
-    let url = format!("https://huggingface.co/api/models?search={}&limit=20&filter=gguf", query);
-    let resp = reqwest::blocking::get(&url).map_err(|e| e.to_string())?;
+fn search_hf(query: String, hf_base: Option<String>, hf_token: Option<String>) -> Result<Vec<String>, String> {
+    let root = hf_api_root(&hf_base)?;
+    let token = clean_hf_token(hf_token)?;
+    let q = form_escape(query.trim());
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = format!("{root}/api/models?search={q}&limit=20&filter=gguf");
+    let client = reqwest::blocking::Client::new();
+    let req = client.get(&url).header("User-Agent", "FreeLocalAI/2.0");
+    let req = apply_hf_auth(req, &url, &token, Some(root.as_str()));
+    let resp = req.send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("搜索失败：HTTP {}", resp.status()));
+    }
     let v: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     if let Some(arr) = v.as_array() {
@@ -1166,6 +1357,66 @@ mod fit_tests {
     }
 }
 
+#[cfg(test)]
+mod settings_net_tests {
+    use super::*;
+
+    #[test]
+    fn hf_token_stays_off_other_hosts() {
+        assert!(!should_attach_hf_token(
+            "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama.zip",
+            Some("mirror.example")
+        ));
+        assert!(!should_attach_hf_token(
+            "https://proxy.example/https://github.com/ggml-org/llama.cpp/x.zip",
+            Some("https://mirror.example")
+        ));
+        assert!(!should_attach_hf_token(
+            "https://evil.example/org/repo",
+            Some("https://mirror.example/extra")
+        ));
+    }
+
+    #[test]
+    fn hf_token_attaches_to_official_and_chosen_mirror() {
+        assert!(should_attach_hf_token(
+            "https://huggingface.co/org/repo/resolve/main/model.gguf",
+            None
+        ));
+        assert!(should_attach_hf_token(
+            "https://mirror.example/org/repo/resolve/main/model.gguf",
+            Some("https://mirror.example")
+        ));
+        assert!(!should_attach_hf_token("http://huggingface.co/org/repo", None));
+    }
+
+    #[test]
+    fn bad_token_is_rejected_and_blank_is_absent() {
+        assert!(clean_hf_token(Some("hf_ok".into())).unwrap().is_some());
+        assert!(clean_hf_token(Some("  ".into())).unwrap().is_none());
+        assert!(clean_hf_token(Some("bad token".into())).is_err());
+        assert!(clean_hf_token(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn mirror_root_only() {
+        assert_eq!(hf_api_root(&None).unwrap(), "https://huggingface.co");
+        assert_eq!(
+            hf_api_root(&Some("https://mirror.example".into())).unwrap(),
+            "https://mirror.example"
+        );
+        assert!(hf_api_root(&Some("http://mirror.example".into())).is_err());
+        assert!(hf_api_root(&Some("https://mirror.example/path".into())).is_err());
+    }
+
+    #[test]
+    fn import_stem_drops_odd_characters() {
+        assert_eq!(import_stem("llama-b12110.zip"), "llama-b12110");
+        assert_eq!(import_stem("../sneaky.zip"), "_sneaky");
+        assert_eq!(import_stem("..zip"), "engine");
+    }
+}
+
 fn main() {
     ensure_dirs();
     tauri::Builder::default()
@@ -1183,6 +1434,7 @@ fn main() {
             get_catalog_with_fit,
             list_hf_files,
             download_file,
+            import_engine_zip,
             list_local_models,
             import_model,
             start_chat,
