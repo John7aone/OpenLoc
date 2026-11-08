@@ -202,7 +202,7 @@
 <div class="composer-bar">
 <div class="composer-tools">
 <button type="button" class="toolbtn" onclick="pickAttach()" title="添加附件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5l6.2-6.2a3 3 0 014.2 4.2l-7.4 7.4a4.5 4.5 0 01-6.4-6.4l6.8-6.8"/></svg>附件</button>
-<button type="button" class="toolbtn" id="shotBtn" onclick="captureForChat()" title="截图并放入当前对话。网页预览不可截屏，桌面版可用。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
+<button type="button" class="toolbtn" id="shotBtn" onclick="captureForChat()" title="框选一块区域，确认后加入当前对话。取消则不贴图。网页预览不能真的截图。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
 <button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
 <button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="操作电脑"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>操作电脑</button>
 <button type="button" class="toolbtn" onclick="tab('img', document.querySelector('#nav [data-page=img]'))" title="画图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l5-4 3 3 3-2 3 3"/></svg>画图</button>
@@ -255,7 +255,7 @@
 <div class="composer-hint">文件夹里的读写在桌面版会真的执行；危险命令会被拦住。网页预览不会真的跑 Agent。</div>
 <div class="composer-bar">
 <div class="composer-tools">
-<button type="button" class="toolbtn" onclick="captureForAgent()" title="截图到这个任务。网页预览不可截屏。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
+<button type="button" class="toolbtn" onclick="captureForAgent()" title="框选一块区域。确认后记在这个任务旁；取消不贴图。网页预览不能真的截图。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
 <button type="button" class="net-switch" data-net-switch="1" role="switch" aria-checked="false" onclick="toggleNet()" title="与对话页同一个联网开关，默认不联网。">
 <span class="net-track" aria-hidden="true"><span class="net-knob"></span></span>
 <span class="js-net-label">本机运行 · 不联网</span>

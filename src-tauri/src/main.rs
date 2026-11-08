@@ -9,6 +9,7 @@
 
 mod chat_proto;
 mod engine_io;
+mod region_shot;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -931,86 +932,7 @@ fn web_search(query: String) -> Result<String, String> {
     if results.is_empty() { Ok("没搜到相关结果，请换个词再试。".to_string()) } else { Ok(results.join("\n\n")) }
 }
 
-// ---------- 截屏：保存到 outputs。对话和 Agent 的截图进附件 ----------
-fn command_exists(cmd: &str) -> bool {
-    #[cfg(windows)]
-    let finder = "where";
-    #[cfg(not(windows))]
-    let finder = "which";
-    Command::new(finder)
-        .arg(cmd)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn gui_session() -> bool {
-    if cfg!(windows) || cfg!(target_os = "macos") {
-        return true;
-    }
-    std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
-}
-
-fn save_fullscreen(out: &Path) -> Result<(), String> {
-    let screens = screenshots::Screen::all().map_err(|e| format!("没有检测到显示器：{}", e))?;
-    let screen = screens.first().ok_or("没有检测到显示器")?;
-    let image = screen.capture().map_err(|e| format!("截屏失败：{}", e))?;
-    if let Some(parent) = out.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    image.save(out).map_err(|e| format!("保存截图失败：{}", e))?;
-    Ok(())
-}
-
-/// 有能把选区存成文件的系统工具时走选区。取消或失败不改走整屏，避免用户没选却贴上一张全屏。
-/// 没有任何选区工具时返回 Ok(false)，调用方再整屏截取。
-fn run_region_tool(out: &Path) -> Result<bool, String> {
-    if !gui_session() {
-        return Ok(false);
-    }
-    let path = out.display().to_string();
-    let tools: &[(&str, &[&str], &str)] = &[
-        ("gnome-screenshot", &["-a", "-f"], "path"),
-        ("spectacle", &["-r", "-b", "-n", "-o"], "path"),
-        ("scrot", &["-s"], "path"),
-        ("screencapture", &["-i"], "path"),
-        ("flameshot", &["gui", "-r"], "stdout"),
-    ];
-    for (cmd, args, kind) in tools {
-        if !command_exists(cmd) {
-            continue;
-        }
-        if *kind == "stdout" {
-            let output = Command::new(*cmd)
-                .args(*args)
-                .output()
-                .map_err(|e| format!("无法打开选区工具 {}：{}", cmd, e))?;
-            if output.status.success() && !output.stdout.is_empty() {
-                fs::write(out, &output.stdout).map_err(|e| format!("保存选区失败：{}", e))?;
-                return Ok(true);
-            }
-            return Err("选区已取消或没有生成图片，没有贴上附件。".to_string());
-        }
-        let mut owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
-        owned.push(path.clone());
-        let status = Command::new(*cmd)
-            .args(&owned)
-            .status()
-            .map_err(|e| format!("无法打开选区工具 {}：{}", cmd, e))?;
-        if status.success()
-            && out.is_file()
-            && fs::metadata(out).map(|m| m.len() > 0).unwrap_or(false)
-        {
-            return Ok(true);
-        }
-        let _ = fs::remove_file(out);
-        return Err("选区已取消或没有生成图片，没有贴上附件。".to_string());
-    }
-    Ok(false)
-}
-
+// ---------- 截屏：只保存用户确认的选区。取消不写整屏，也不进附件 ----------
 #[derive(Serialize)]
 struct ChatShot {
     path: String,
@@ -1026,18 +948,11 @@ fn capture_chat_image() -> Result<ChatShot, String> {
         .unwrap_or_default();
     let name = format!("shot_{}_{:03}.png", d.as_secs(), d.subsec_millis());
     let out = outputs_dir().join(&name);
-    if run_region_tool(&out)? {
-        return Ok(ChatShot {
-            path: out.display().to_string(),
-            name,
-            mode: "region".to_string(),
-        });
-    }
-    save_fullscreen(&out)?;
+    region_shot::capture_region_file(&out)?;
     Ok(ChatShot {
         path: out.display().to_string(),
         name,
-        mode: "screen".to_string(),
+        mode: "region".to_string(),
     })
 }
 
