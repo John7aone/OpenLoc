@@ -110,23 +110,69 @@ fn get_hardware() -> Hardware {
     }
 }
 
+fn parse_scale(params: &str) -> Option<(f64, f64)> {
+    // 返回（总参数 B，激活参数 B）。「见仓库」不猜。
+    // tok/s 在 src/recommend.js；这里只给能不能放进显存的标签。
+    if params.is_empty() || params.contains("见仓库") {
+        return None;
+    }
+    let chars: Vec<char> = params.chars().collect();
+    let mut i = 0;
+    let mut total: Option<f64> = None;
+    let mut active: Option<f64> = None;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_ascii_digit() || (c == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
+            let start = i;
+            i += 1;
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                i += 1;
+            }
+            let num: String = chars[start..i].iter().collect();
+            let mut j = i;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && (chars[j] == 'B' || chars[j] == 'b') {
+                if let Ok(v) = num.parse::<f64>() {
+                    let window: String = chars[j..].iter().take(8).collect();
+                    total = Some(total.map(|t| t.max(v)).unwrap_or(v));
+                    if window.contains("激活") {
+                        active = Some(v);
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    let total = total?;
+    Some((total, active.unwrap_or(total)))
+}
+
 fn fit_hint(params: &str, mem_gb: f64, vram_gb: f64) -> String {
-    // 粗略估算：Q4 量化大约每 10 亿参数占 0.6GB，加上运行开销。
-    // 关键：能不能流畅跑，看的是显存，不是内存。模型放不进显存，
-    // 只能分到内存里跑，速度会慢很多。内存只决定“能不能跑起来”。
-    let est: f64 = params
-        .split_whitespace()
-        .next()
-        .and_then(|s| s.replace('B', "").parse::<f64>().ok())
-        .unwrap_or(4.0)
-        * 0.6
-        + 2.0;
-    if vram_gb > 0.0 && est <= vram_gb * 0.9 {
-        format!("流畅：估计约 {:.0}GB，能放进 {:.0}GB 显存", est, vram_gb)
-    } else if est <= mem_gb {
-        format!("能跑：估计约 {:.0}GB，放不进 {:.0}GB 显存，会分到内存，速度较慢", est, vram_gb)
+    // 与 src/recommend.js 的落点同一口径：Q4_K_M 按每 10 亿参数 0.56GB，
+    // 再加 0.8GB 余量。整份放进显存的 85% 才标流畅。混合专家按总参数占地方，
+    // 不按激活参数假装整份模型放得进显存。
+    let Some((total, _)) = parse_scale(params) else {
+        return "待检测：参数规模见仓库，不估算能不能放进显存".to_string();
+    };
+    let runtime = total * 0.56 + 0.8;
+    let usable = vram_gb * 0.85;
+    if vram_gb > 0.0 && runtime <= usable {
+        format!("流畅：估计约 {:.0}GB，能放进 {:.0}GB 显存", runtime, vram_gb)
+    } else if mem_gb > 0.0 && runtime <= mem_gb * 0.75 {
+        if vram_gb > 0.0 {
+            format!(
+                "能跑：估计约 {:.0}GB，放不进 {:.0}GB 显存，会分到内存",
+                runtime, vram_gb
+            )
+        } else {
+            format!("能跑：估计约 {:.0}GB，没有独立显存，放在内存", runtime)
+        }
     } else {
-        format!("不建议：估计约 {:.0}GB，你的内存可能不够", est)
+        format!("较慢：估计约 {:.0}GB，内存也可能不够", runtime)
     }
 }
 
@@ -1175,6 +1221,41 @@ fn extract_content(task: &str) -> Option<String> {
         None
     } else {
         Some(s)
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn small_model_fits_8gb() {
+        let hint = fit_hint("4B", 32.0, 8.0);
+        assert!(hint.starts_with("流畅"), "{hint}");
+        let hint = fit_hint("E4B（高效小模型）", 32.0, 8.0);
+        assert!(hint.starts_with("流畅"), "{hint}");
+    }
+
+    #[test]
+    fn moe_uses_total_params_for_vram() {
+        let hint = fit_hint("35B 总量 / 约 3B 激活", 32.0, 8.0);
+        assert!(hint.starts_with("能跑"), "{hint}");
+        assert!(!hint.contains("流畅"));
+        let huge = fit_hint("180B 总量 / 约 6B 激活", 32.0, 8.0);
+        assert!(huge.starts_with("较慢"), "{huge}");
+    }
+
+    #[test]
+    fn unknown_scale_is_not_a_guess() {
+        let hint = fit_hint("见仓库（Flash 系列）", 32.0, 8.0);
+        assert!(hint.starts_with("待检测"), "{hint}");
+    }
+
+    #[test]
+    fn cpu_only_can_still_run_a_small_model() {
+        let hint = fit_hint("4B", 16.0, 0.0);
+        assert!(hint.starts_with("能跑"), "{hint}");
+        assert!(hint.contains("内存"));
     }
 }
 

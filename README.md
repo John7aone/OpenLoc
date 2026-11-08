@@ -16,7 +16,8 @@
 ## 它能做什么
 
 - **硬件检测**：CPU、内存、磁盘、NVIDIA 显卡（nvidia-smi），并给模型大小建议。
-- **模型目录**：16 个公开推荐模型，均为 Hugging Face 上公开的 unsloth GGUF 仓库，点开可实时查量化文件并一键下载。描述为本程序自己所写。
+- **模型目录**：16 个公开推荐模型，均为 Hugging Face 上公开的 unsloth GGUF 仓库，点开可实时查量化文件并一键下载。描述为本程序自己所写。推荐卡片会写出参数规模、量化、约略体积、落在显存还是内存，以及约估的 tok/s。
+- **推荐速度**：概览和模型页上的「约 XX tok/s」来自 `src/recommend.js`，是带宽公式，不是跑分。体积按总参数和量化字节约出（Q4_K_M 为每十亿参数 0.56 GB），再加 0.8 GB 余量。整份放进显存的 85% 才标「流畅」。tok/s = 有效带宽 ÷ 每 token 要读的权重；稠密模型读全部参数，混合专家只读激活参数。显卡用公开规格里的显存带宽 × 0.35，名字对不上就按显存容量取一档并写明。没有硬件时写「待检测 / 网页预览」或「约估不可用」，不编一个精确数字。运行页的预计速度用同一套公式。已安装文件优先用真实体积。
 - **聊天**：llama.cpp 的 llama-server，上下文 4K / 8K / 16K / 32K 可选。输入栏可以截图；网页预览会说明做不到，不会假装已经贴图。联网开关默认关闭，没有接上检索时只说明没搜到，不编造结果。
 - **画图**：stable-diffusion.cpp 的 sd-cli。
 - **视频**：两种，界面上分得清清楚楚——ffmpeg 动效视频（不是扩散生成，CPU 就能跑）；sd-cli 的 vid_gen 扩散视频（Wan，需要 Wan 视频模型和足够显存）。
@@ -76,7 +77,7 @@ python3 -m http.server 8753
 
 然后打开 http://127.0.0.1:8753/src/index.html 。直接双击 `src/index.html` 也可以。限制：没有本机硬件检测，不能下载，不能启动引擎，对话、画图、视频和 Agent 都不会真的跑。页面会标「网页预览」或「未检测」。
 
-`shots/` 里是 1280×800 的走查截图，文件名注明主题：侧栏和概览（深色、浅色）、运行页（浅色）、对话空态（深色）。静态页面截的，所以硬件标着未检测。直接打开 `src/index.html` 可以走查同一套样式。
+`shots/` 里是 1280×800 的走查截图。`shots/overview-recommend.png` 和 `shots/models-recommend.png` 是推荐卡片：浏览器里替硬件接口填了一份示例（RTX 3070 Ti、8 GB 显存、32 GB 内存），用来看 tok/s 和体积怎么排版，不是这台机器检测到的，也不是 Windows 实测。`shots/overview-preview-speed.png` 是不注入硬件的网页预览，速度写「待检测 / 网页预览」。更早的侧栏、运行页、对话截图仍是静态页面，硬件标着未检测。直接打开 `src/index.html` 可以走查同一套样式。
 
 ## 生成的文件放哪
 
@@ -97,7 +98,7 @@ node --test test/chat-flow.test.mjs
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-在准备这次提交的 Linux 环境里，`node --test test/chat-flow.test.mjs` 为 8 通过，`cargo test --manifest-path src-tauri/Cargo.toml` 为 18 通过。其中 2 项真实模型测试在没有 `OPENLOC_LIVE_PORT` 时直接返回，不访问网络。另一次 `OPENLOC_LIVE_PORT=18080 cargo test --manifest-path src-tauri/Cargo.toml live_model` 走了下面的真模型。Rust 侧用本机假 HTTP 服务覆盖：健康检查只有 `status=ok` 才算就绪、端口占用、非流式回复、思考字段被拒绝后重试、流式中途取消。解压测试按 Windows CPU 包的布局放了根目录上的 `llama-server.exe`，并拒绝路径穿越。
+在准备这次提交的 Linux 环境里，`npm test` 为 22 通过（`test/chat-flow.test.mjs` 8 项，`test/recommend.test.mjs` 14 项）。`cargo test --manifest-path src-tauri/Cargo.toml` 为 22 通过（原有 18 项，加上推荐落点 4 项）。这台环境自带的 Cargo 1.83 读不了现有 lockfile 里的 edition 2024，所以 Rust 测试用的是 Rust 1.99。其中 2 项真实模型测试在没有 `OPENLOC_LIVE_PORT` 时直接返回，不访问网络。另一次 `OPENLOC_LIVE_PORT=18080 cargo test --manifest-path src-tauri/Cargo.toml live_model` 走了下面的真模型。Rust 侧用本机假 HTTP 服务覆盖：健康检查只有 `status=ok` 才算就绪、端口占用、非流式回复、思考字段被拒绝后重试、流式中途取消。解压测试按 Windows CPU 包的布局放了根目录上的 `llama-server.exe`，并拒绝路径穿越。推荐速度的数字由 `test/recommend.test.mjs` 锁住，例如 4B Q4 在标称 608 GB/s 的 8 GB 显卡上约为 95 tok/s。这是公式结果，不是那块显卡的实测。
 
 另一次真实推理（不是 mock）：llama.cpp `b12110` 的 Ubuntu x64 CPU 包，模型 `stories15M-q4_0.gguf`（约 19MB，公开小模型）。命令行测试里 `llama-server` 监听 `127.0.0.1:18080`，`/health` 返回 ok。经 OpenLoc 的请求函数拿到非空回复，非流式开头是 “Suddenled the ground…”，流式开头是 “Sisss are very icy windows…”。同一套引擎和模型也在 Linux 桌面窗口里走过：运行页显示“健康检查已通过”和 `127.0.0.1:8080`，联网开关保持关闭，对话页收到以 “Suddenled her feet…” 开头的回复。限制：这是 TinyStories 小模型，不会按指令回答；训练上下文只有 128，引擎把更长的上下文截断了；跑在 Linux CPU 上，不能当成 Windows 或显卡结果。没有下载更大的模型，也没有调用收费 API。
 
@@ -124,3 +125,5 @@ npm run tauri build
 6. 故意试一次：不启动就发送、选一个不存在的名字、把端口改成正在占用的端口。页面上应有中文原因和下一步，不能变成“运行中”。
 
 画图、视频和 Agent 这一轮没有加新能力。没有 GPU 时画图会很慢或直接报错。没有做付费加速。
+
+推荐卡片上的 tok/s 也没有在 Windows 真机上对过秒表。显卡带宽用的是公开规格表，检测不到型号时按显存容量取一档。网页预览或硬件检测失败时，界面应写「待检测 / 网页预览」或「约估不可用」，不应该出现一个看起来像实测的 tok/s。Windows 上可以在概览看推荐卡片：有 NVIDIA 显卡时应出现「约 XX tok/s」和「全部放进显卡」或「放不进显存」；把量化从 Q4 改成 Q8，体积应变大、速度应变慢。这只说明公式跟着硬件和量化在走，不代表数字已经用 llama-bench 核对过。

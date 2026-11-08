@@ -49,7 +49,7 @@
 <div class="seg disk"><b>硬盘</b><span id="layer-disk-t">兜底</span></div>
 </div>
 <p class="muted small" id="layer-cap">模型先放进显卡，放不下的部分再放到内存。越靠左越快。网页预览没有你的真实容量时，这三条只是分层示意。</p>
-<div class="hero-actions"><button type="button" id="hero-dl" onclick="askDownload('', this)">下载推荐量化</button><span class="muted small">大小以 Hugging Face 仓库为准，这里不预填一个假的文件体积。</span></div>
+<div class="hero-actions"><button type="button" id="hero-dl" onclick="askDownload('', this)">下载推荐量化</button><span class="muted small" id="hero-size-note">体积按参数量和量化约出来，不是仓库里的精确字节。真正下载仍要到 Hugging Face 对上文件名。</span></div>
 </div>
 <div class="specs">
 <div class="hwrows">
@@ -72,7 +72,7 @@
 
 <div id="cat" class="tab">
 <div class="sec-head"><h2>模型</h2><button type="button" onclick="importPrompt()">导入本地 GGUF</button></div>
-<p class="muted">推荐目录是公开的 GGUF 仓库，介绍是 OpenLoc 自己写的。量化下拉是你打算下载的规格；真正的文件要到仓库里对上名字才会下。</p>
+<p class="muted">推荐目录是公开的 GGUF 仓库，介绍是 OpenLoc 自己写的。量化下拉会改体积和预计速度。体积和 tok/s 都是约估，不是仓库精确字节，也不是跑分。真正的文件要到仓库里对上名字才会下。</p>
 <div class="subtabs">
 <button id="sub-rec" class="on" type="button" onclick="catTab('rec',this)">推荐模型</button>
 <button id="sub-inst" type="button" onclick="catTab('inst',this)">已安装</button>
@@ -155,9 +155,10 @@
 </div>
 <input class="ghost-check" type="checkbox" id="lanmode">
 <div class="statrow">
-<div class="stat"><div class="k">预计速度</div><div class="v" id="est-speed">待实测</div></div>
+<div class="stat"><div class="k">预计速度</div><div class="v" id="est-speed">待检测 / 网页预览</div></div>
 <div class="stat"><div class="k">首次加载</div><div class="v" id="est-load">约几秒到一分钟</div></div>
 </div>
+<p class="muted small" id="est-speed-note">网页预览没有硬件数据，不会编一个 tok/s。</p>
 <button id="startBtn" type="button" onclick="startRunModel()">启动模型</button>
 <button class="sec" id="stopBtn" type="button" onclick="stopRunModel()" style="display:none">停止模型</button>
 <button class="sec" id="chatBtn" type="button" onclick="tab('chat', document.querySelector('#nav [data-page=chat]'))" style="display:none">开始对话</button>
@@ -342,6 +343,7 @@
 
 </main>
 </div>
+<script src="recommend.js"></script>
 <script src="chat-flow.js"></script>
 <script src="main.js"></script>
 </body>
