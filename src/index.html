@@ -104,7 +104,8 @@
 <div id="imgmodels"></div>
 </div>
 <div id="cat-search" style="display:none">
-<div class="searchrow"><input id="hfq" placeholder="搜索 HuggingFace 上的 GGUF 模型…"><button type="button" onclick="searchHf()">搜索</button></div>
+<div class="searchrow"><input id="hfq" placeholder="搜索 HuggingFace 上的 GGUF 模型…" onkeydown="if(event.key==='Enter'){event.preventDefault();searchHf();}"><button type="button" onclick="searchHf()">搜索</button></div>
+<p class="muted small" id="hf-note">点开仓库后，每个文件在下载按钮旁边显示体积、近 30 天仓库下载次数，以及本机 tok/s。体积是仓库文件的字节。下载次数是整个仓库的，不是单个文件。tok/s 标成「估算」，和推荐模型用同一套带宽公式，不是跑分。没有读到显卡和内存时不编速度。</p>
 <p class="search-empty" id="hfempty">输入模型名字搜索 HuggingFace 上的 GGUF 模型，例如 qwen3.8、gemma-4、glm</p>
 <div id="hfres"></div>
 </div>
@@ -448,6 +449,7 @@
 </main>
 </div>
 <script src="recommend.js"></script>
+<script src="hf-search.js"></script>
 <script src="chat-flow.js"></script>
 <script src="settings-prefs.js"></script>
 <script src="main.js"></script>

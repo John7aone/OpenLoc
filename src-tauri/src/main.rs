@@ -239,13 +239,125 @@ fn get_catalog_with_fit() -> Vec<serde_json::Value> {
         .collect()
 }
 
-#[derive(Deserialize)]
-struct HfApi {
-    siblings: Option<Vec<HfSibling>>,
+const HF_UA: &str = "OpenLoc/0.1";
+
+#[derive(Serialize, Clone)]
+struct HfSearchHit {
+    id: String,
+    downloads: Option<u64>,
 }
-#[derive(Deserialize)]
-struct HfSibling {
-    rfilename: String,
+
+#[derive(Serialize, Clone)]
+struct HfFileMeta {
+    path: String,
+    size_bytes: Option<u64>,
+}
+
+#[derive(Serialize, Clone)]
+struct HfRepoDetail {
+    repo: String,
+    downloads: Option<u64>,
+    total_params: Option<u64>,
+    files: Vec<HfFileMeta>,
+}
+
+fn json_u64(v: Option<&serde_json::Value>) -> Option<u64> {
+    let value = v?;
+    if let Some(n) = value.as_u64() {
+        return Some(n);
+    }
+    let f = value.as_f64()?;
+    if f.is_finite() && f >= 0.0 && f < (u64::MAX as f64) {
+        Some(f as u64)
+    } else {
+        None
+    }
+}
+
+fn is_downloadable_gguf(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
+    name.ends_with(".gguf") && !name.starts_with("mmproj")
+}
+
+fn parse_hf_search(v: &serde_json::Value) -> Vec<HfSearchHit> {
+    let mut out = Vec::new();
+    let Some(arr) = v.as_array() else {
+        return out;
+    };
+    for m in arr {
+        let Some(id) = m.get("id").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        out.push(HfSearchHit {
+            id: id.to_string(),
+            downloads: json_u64(m.get("downloads")),
+        });
+    }
+    out
+}
+
+fn parse_hf_repo(repo: &str, v: &serde_json::Value) -> HfRepoDetail {
+    let mut files = Vec::new();
+    if let Some(arr) = v.get("siblings").and_then(|s| s.as_array()) {
+        for sib in arr {
+            let Some(path) = sib.get("rfilename").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            if !is_downloadable_gguf(path) {
+                continue;
+            }
+            let mut size = json_u64(sib.get("size"));
+            if size.is_none() {
+                size = json_u64(sib.get("lfs").and_then(|lfs| lfs.get("size")));
+            }
+            files.push(HfFileMeta {
+                path: path.to_string(),
+                size_bytes: size,
+            });
+        }
+    }
+    let total_params = json_u64(v.get("gguf").and_then(|g| g.get("total")));
+    HfRepoDetail {
+        repo: repo.to_string(),
+        downloads: json_u64(v.get("downloads")),
+        total_params,
+        files,
+    }
+}
+
+fn hf_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn fetch_hf_json(
+    url: &str,
+    token: &Option<String>,
+    token_host: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let req = hf_client()?.get(url).header("User-Agent", HF_UA);
+    let resp = apply_hf_auth(req, url, token, token_host)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.json().map_err(|e| e.to_string())
+}
+
+fn hf_model_api_url(root: &str, repo: &str) -> String {
+    let path = repo
+        .split('/')
+        .map(url_encode)
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("{root}/api/models/{path}?blobs=true")
 }
 
 fn https_host(url: &str) -> Option<String> {
@@ -363,29 +475,42 @@ fn apply_hf_auth(
     req
 }
 
-#[tauri::command]
-fn list_hf_files(repo: String, hf_base: Option<String>, hf_token: Option<String>) -> Result<Vec<String>, String> {
-    if !repo_ok(&repo) {
+fn load_hf_repo(
+    repo: &str,
+    hf_base: Option<String>,
+    hf_token: Option<String>,
+) -> Result<HfRepoDetail, String> {
+    if !repo_ok(repo) {
         return Err("仓库名不对。应是 组织/仓库 这种形式。".to_string());
     }
     let root = hf_api_root(&hf_base)?;
     let token = clean_hf_token(hf_token)?;
-    let url = format!("{root}/api/models/{repo}");
-    let client = reqwest::blocking::Client::new();
-    let req = client.get(&url).header("User-Agent", "FreeLocalAI/2.0");
-    let req = apply_hf_auth(req, &url, &token, Some(root.as_str()));
-    let resp = req.send().map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("查询文件失败：HTTP {}", resp.status()));
-    }
-    let api: HfApi = resp.json().map_err(|e| e.to_string())?;
-    Ok(api
-        .siblings
-        .unwrap_or_default()
+    let url = hf_model_api_url(&root, repo);
+    let api = fetch_hf_json(&url, &token, Some(root.as_str()))
+        .map_err(|e| format!("查询文件失败：{e}"))?;
+    Ok(parse_hf_repo(repo, &api))
+}
+
+#[tauri::command]
+fn list_hf_files(
+    repo: String,
+    hf_base: Option<String>,
+    hf_token: Option<String>,
+) -> Result<Vec<String>, String> {
+    Ok(load_hf_repo(&repo, hf_base, hf_token)?
+        .files
         .into_iter()
-        .map(|s| s.rfilename)
-        .filter(|f| f.to_lowercase().ends_with(".gguf") && !f.to_lowercase().starts_with("mmproj"))
+        .map(|f| f.path)
         .collect())
+}
+
+#[tauri::command]
+fn hf_repo_detail(
+    repo: String,
+    hf_base: Option<String>,
+    hf_token: Option<String>,
+) -> Result<HfRepoDetail, String> {
+    load_hf_repo(&repo, hf_base, hf_token)
 }
 
 // ---------- 下载（断点续传，416 视为已完成） ----------
@@ -1045,7 +1170,11 @@ fn delete_model(name: String) -> Result<String, String> {
     Ok(format!("已删除 {}", name))
 }
 #[tauri::command]
-fn search_hf(query: String, hf_base: Option<String>, hf_token: Option<String>) -> Result<Vec<String>, String> {
+fn search_hf(
+    query: String,
+    hf_base: Option<String>,
+    hf_token: Option<String>,
+) -> Result<Vec<HfSearchHit>, String> {
     let root = hf_api_root(&hf_base)?;
     let token = clean_hf_token(hf_token)?;
     let q = form_escape(query.trim());
@@ -1053,19 +1182,9 @@ fn search_hf(query: String, hf_base: Option<String>, hf_token: Option<String>) -
         return Ok(Vec::new());
     }
     let url = format!("{root}/api/models?search={q}&limit=20&filter=gguf");
-    let client = reqwest::blocking::Client::new();
-    let req = client.get(&url).header("User-Agent", "FreeLocalAI/2.0");
-    let req = apply_hf_auth(req, &url, &token, Some(root.as_str()));
-    let resp = req.send().map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("搜索失败：HTTP {}", resp.status()));
-    }
-    let v: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    if let Some(arr) = v.as_array() {
-        for m in arr { if let Some(id) = m.get("id").and_then(|x| x.as_str()) { out.push(id.to_string()); } }
-    }
-    Ok(out)
+    let v = fetch_hf_json(&url, &token, Some(root.as_str()))
+        .map_err(|e| format!("搜索失败：{e}"))?;
+    Ok(parse_hf_search(&v))
 }
 #[tauri::command]
 fn list_local_model_info() -> Vec<serde_json::Value> {
@@ -1417,6 +1536,51 @@ mod settings_net_tests {
     }
 }
 
+#[cfg(test)]
+mod hf_meta_tests {
+    use super::*;
+
+    #[test]
+    fn search_hits_keep_id_and_month_downloads() {
+        let v = serde_json::json!([
+            {"id": "unsloth/Qwen3.8-Flash-Next-GGUF", "downloads": 1423501},
+            {"id": "org/no-count"},
+            {"downloads": 3},
+            {"id": ""}
+        ]);
+        let hits = parse_hf_search(&v);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].id, "unsloth/Qwen3.8-Flash-Next-GGUF");
+        assert_eq!(hits[0].downloads, Some(1_423_501));
+        assert_eq!(hits[1].id, "org/no-count");
+        assert_eq!(hits[1].downloads, None);
+    }
+
+    #[test]
+    fn model_files_use_sibling_size_skip_mmproj_and_keep_param_count() {
+        let v = serde_json::json!({
+            "downloads": 10,
+            "gguf": {"total": 4_000_000_000u64, "totalFileSize": 999},
+            "siblings": [
+                {"rfilename": "mmproj-BF16.gguf", "size": 100},
+                {"rfilename": "Q4_K_M/model-Q4_K_M.gguf", "size": 2_500_000_000u64},
+                {"rfilename": "BF16/a-00001-of-00002.gguf", "lfs": {"size": 11}},
+                {"rfilename": "README.md", "size": 12},
+                {"rfilename": "nested/mmproj-model.gguf", "size": 8}
+            ]
+        });
+        let d = parse_hf_repo("org/name", &v);
+        assert_eq!(d.repo, "org/name");
+        assert_eq!(d.downloads, Some(10));
+        assert_eq!(d.total_params, Some(4_000_000_000));
+        assert_eq!(d.files.len(), 2);
+        assert_eq!(d.files[0].path, "Q4_K_M/model-Q4_K_M.gguf");
+        assert_eq!(d.files[0].size_bytes, Some(2_500_000_000));
+        assert_eq!(d.files[1].path, "BF16/a-00001-of-00002.gguf");
+        assert_eq!(d.files[1].size_bytes, Some(11));
+    }
+}
+
 fn main() {
     ensure_dirs();
     tauri::Builder::default()
@@ -1433,6 +1597,7 @@ fn main() {
             get_catalog,
             get_catalog_with_fit,
             list_hf_files,
+            hf_repo_detail,
             download_file,
             import_engine_zip,
             list_local_models,

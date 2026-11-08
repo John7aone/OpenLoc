@@ -18,6 +18,7 @@
 - **硬件检测**：CPU、内存、磁盘、NVIDIA 显卡（nvidia-smi），并给模型大小建议。
 - **模型目录**：16 个公开推荐模型，均为 Hugging Face 上公开的 unsloth GGUF 仓库，点开可实时查量化文件并一键下载。描述为本程序自己所写。推荐卡片会写出参数规模、量化、约略体积、落在显存还是内存，以及约估的 tok/s。
 - **推荐速度**：概览和模型页上的「约 XX tok/s」来自 `src/recommend.js`，是带宽公式，不是跑分。体积按总参数和量化字节约出（Q4_K_M 为每十亿参数 0.56 GB），再加 0.8 GB 余量。整份放进显存的 85% 才标「流畅」。tok/s = 有效带宽 ÷ 每 token 要读的权重；稠密模型读全部参数，混合专家只读激活参数。显卡用公开规格里的显存带宽 × 0.35，名字对不上就按显存容量取一档并写明。没有硬件时写「待检测 / 网页预览」或「约估不可用」，不编一个精确数字。运行页的预计速度用同一套公式。已安装文件优先用真实体积。
+- **搜索 Hugging Face**：仓库列表先显示近 30 天下载次数。点开后每个 GGUF 在下载按钮旁显示体积、同一下载次数，以及本机 tok/s。体积来自 `https://huggingface.co/api/models/{仓库}?blobs=true` 的 `siblings.size`（没有则用 `lfs.size`），按 1000 进位写成 GB/MB。下载次数是这个接口的 `downloads` 字段，Hugging Face 网页把它标成 Downloads last month，所以界面写「近 30 天仓库下载」；公开接口没有单个文件的下载次数。分卷按整套字节估算速度，不用单独那一小卷。仓库若在 OpenLoc 目录里，用目录上的激活参数；否则用 GGUF 元数据里的 `gguf.total` 当总参数，并写明没有激活参数。没有读到硬件时不填 tok/s。mmproj 不列在下载表里。
 - **聊天**：llama.cpp 的 llama-server，上下文 4K / 8K / 16K / 32K 可选。输入栏「截图」只保存框选确认后的区域：Windows 上先把屏幕冻在内存里，拖拽框选，点「确认」或按 Enter 才把选区裁成 PNG；Esc、右键或「取消」不贴图，也不会改存整屏。没有选区工具的系统同样不改成整屏。网页预览会说明做不到，不会假装已经贴图。联网开关默认关闭，没有接上检索时只说明没搜到，不编造结果。
 - **画图**：stable-diffusion.cpp 的 sd-cli。
 - **视频**：两种，界面上分得清清楚楚——ffmpeg 动效视频（不是扩散生成，CPU 就能跑）；sd-cli 的 vid_gen 扩散视频（Wan，需要 Wan 视频模型和足够显存）。
@@ -98,7 +99,7 @@ node --test test/chat-flow.test.mjs
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-在准备这次提交的 Linux 环境里，`npm test` 为 22 通过（`test/chat-flow.test.mjs` 8 项，`test/recommend.test.mjs` 14 项）。`cargo test --manifest-path src-tauri/Cargo.toml` 为 22 通过（原有 18 项，加上推荐落点 4 项）。这台环境自带的 Cargo 1.83 读不了现有 lockfile 里的 edition 2024，所以 Rust 测试用的是 Rust 1.99。其中 2 项真实模型测试在没有 `OPENLOC_LIVE_PORT` 时直接返回，不访问网络。另一次 `OPENLOC_LIVE_PORT=18080 cargo test --manifest-path src-tauri/Cargo.toml live_model` 走了下面的真模型。Rust 侧用本机假 HTTP 服务覆盖：健康检查只有 `status=ok` 才算就绪、端口占用、非流式回复、思考字段被拒绝后重试、流式中途取消。解压测试按 Windows CPU 包的布局放了根目录上的 `llama-server.exe`，并拒绝路径穿越。推荐速度的数字由 `test/recommend.test.mjs` 锁住，例如 4B Q4 在标称 608 GB/s 的 8 GB 显卡上约为 95 tok/s。这是公式结果，不是那块显卡的实测。
+在准备推荐速度那次提交的 Linux 环境里，`npm test` 为 22 通过（`test/chat-flow.test.mjs` 8 项，`test/recommend.test.mjs` 14 项）。搜索页这次再加上 `test/hf-search.test.mjs` 8 项，并保留选区截图的 `test/region-shot.test.mjs` 和设置页的 `test/settings-page.test.mjs`，`npm test` 为 35 通过。上一次能编过桌面依赖时，`cargo test --manifest-path src-tauri/Cargo.toml` 为 22 通过（原有 18 项，加上推荐落点 4 项）。这次机器没有 `gdk-3.0`，`cargo test` 停在 `gdk-sys`，新加的 `hf_meta_tests` 没在这里跑起来。这台环境自带的 Cargo 1.83 读不了现有 lockfile 里的 edition 2024，所以 Rust 测试用的是 Rust 1.99。其中 2 项真实模型测试在没有 `OPENLOC_LIVE_PORT` 时直接返回，不访问网络。另一次 `OPENLOC_LIVE_PORT=18080 cargo test --manifest-path src-tauri/Cargo.toml live_model` 走了下面的真模型。Rust 侧用本机假 HTTP 服务覆盖：健康检查只有 `status=ok` 才算就绪、端口占用、非流式回复、思考字段被拒绝后重试、流式中途取消。解压测试按 Windows CPU 包的布局放了根目录上的 `llama-server.exe`，并拒绝路径穿越。推荐速度的数字由 `test/recommend.test.mjs` 锁住，例如 4B Q4 在标称 608 GB/s 的 8 GB 显卡上约为 95 tok/s。这是公式结果，不是那块显卡的实测。
 
 另一次真实推理（不是 mock）：llama.cpp `b12110` 的 Ubuntu x64 CPU 包，模型 `stories15M-q4_0.gguf`（约 19MB，公开小模型）。命令行测试里 `llama-server` 监听 `127.0.0.1:18080`，`/health` 返回 ok。经 OpenLoc 的请求函数拿到非空回复，非流式开头是 “Suddenled the ground…”，流式开头是 “Sisss are very icy windows…”。同一套引擎和模型也在 Linux 桌面窗口里走过：运行页显示“健康检查已通过”和 `127.0.0.1:8080`，联网开关保持关闭，对话页收到以 “Suddenled her feet…” 开头的回复。限制：这是 TinyStories 小模型，不会按指令回答；训练上下文只有 128，引擎把更长的上下文截断了；跑在 Linux CPU 上，不能当成 Windows 或显卡结果。没有下载更大的模型，也没有调用收费 API。
 
