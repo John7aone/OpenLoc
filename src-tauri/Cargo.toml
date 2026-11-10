@@ -15,6 +15,7 @@ serde_json = "1"
 sysinfo = "0.32"
 reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+rfd = "0.15"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 
 [dev-dependencies]

@@ -10,6 +10,7 @@
 mod chat_proto;
 mod download_job;
 mod engine_io;
+mod offload;
 mod region_shot;
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,9 @@ struct AppState {
     probe: Mutex<ProbeNote>,
     download_busy: Mutex<bool>,
     download_cancel: AtomicBool,
+    offload_note: Mutex<String>,
+    media_cancel: AtomicBool,
+    media_pid: Mutex<Option<u32>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -68,8 +72,64 @@ fn base_dir() -> PathBuf {
     dir
 }
 fn engines_dir() -> PathBuf { base_dir().join("engines") }
-fn models_dir() -> PathBuf { base_dir().join("models") }
-fn outputs_dir() -> PathBuf { base_dir().join("outputs") }
+fn roots_file() -> PathBuf { base_dir().join("roots.json") }
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
+struct StorageRoots {
+    models: String,
+    outputs: String,
+}
+
+fn roots_slot() -> &'static Mutex<StorageRoots> {
+    static ROOTS: std::sync::OnceLock<Mutex<StorageRoots>> = std::sync::OnceLock::new();
+    ROOTS.get_or_init(|| Mutex::new(read_roots_file()))
+}
+
+fn read_roots_file() -> StorageRoots {
+    let Ok(text) = fs::read_to_string(roots_file()) else {
+        return StorageRoots::default();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn models_dir() -> PathBuf {
+    let custom = roots_slot().lock().unwrap().models.clone();
+    if !custom.trim().is_empty() {
+        return PathBuf::from(custom.trim());
+    }
+    base_dir().join("models")
+}
+fn outputs_dir() -> PathBuf {
+    let custom = roots_slot().lock().unwrap().outputs.clone();
+    if !custom.trim().is_empty() {
+        return PathBuf::from(custom.trim());
+    }
+    base_dir().join("outputs")
+}
+
+fn writable_dir(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("不是已有的文件夹：{}。这次没有改，也没有新建或搬家。", path.display()));
+    }
+    let probe = path.join(".openloc-write-test");
+    fs::write(&probe, b"ok").map_err(|e| format!("这个文件夹写不进去（{e}）。这次没有改。"))?;
+    let _ = fs::remove_file(probe);
+    Ok(())
+}
+
+fn save_roots(next: &StorageRoots) -> Result<(), String> {
+    if let Some(parent) = roots_file().parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("无法记下目录：{e}"))?;
+    }
+    let text = serde_json::to_string_pretty(next).map_err(|e| format!("无法记下目录：{e}"))?;
+    fs::write(roots_file(), text).map_err(|e| format!("无法记下目录：{e}"))?;
+    *roots_slot().lock().unwrap() = next.clone();
+    Ok(())
+}
+
+fn moved_note(kind: &str, path: &Path) -> String {
+    format!("已改{kind}到 {}。之后的新文件写到这里。原来的文件还在旧位置，这一版不会自动搬家。", path.display())
+}
 fn ensure_dirs() {
     for d in [engines_dir(), models_dir(), outputs_dir()] {
         let _ = fs::create_dir_all(d);
@@ -1293,7 +1353,17 @@ fn start_chat(
         .map_err(|e| format!("无法写启动日志：{e}"))?;
     let err_file = log_file.try_clone().map_err(|e| format!("无法写启动日志：{e}"))?;
     let mut cmd = Command::new(&bin);
-    cmd.args(chat_proto::launch_args(&model_path, port, ctx))
+    let weight = fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
+    let hw = read_hardware();
+    let vram_bytes = if hw.gpu_vram_gb > 0.0 {
+        (hw.gpu_vram_gb * 1024.0 * 1024.0 * 1024.0) as u64
+    } else {
+        0
+    };
+    let blocks = offload::block_count(&model_path).unwrap_or(0);
+    let off = offload::plan(blocks, weight, vram_bytes);
+    *state.offload_note.lock().unwrap() = off.message.clone();
+    cmd.args(chat_proto::launch_args(&model_path, port, ctx, off.gpu_layers))
         .current_dir(bin.parent().unwrap_or(Path::new(".")))
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(err_file));
@@ -1323,8 +1393,9 @@ fn start_chat(
         {
             *state.chat_running.lock().unwrap() = true;
             schedule_warmup(app.clone(), port);
+            let note = state.offload_note.lock().unwrap().clone();
             return Ok(format!(
-                "聊天服务已启动：{model}（仅 127.0.0.1:{port}，健康检查已通过）"
+                "聊天服务已启动：{model}（仅 127.0.0.1:{port}，健康检查已通过）。{note}"
             ));
         }
         if Instant::now() > deadline {
@@ -1419,6 +1490,11 @@ async fn chat_stream(
             Ok(result) => {
                 let cancelled = result.cancelled
                     || app_task.state::<AppState>().chat_gen.load(Ordering::SeqCst) != gen;
+                if let Some(tokens) = result.completion_tokens {
+                    if !cancelled {
+                        emit_chat(&app_task, stream_id, "usage", tokens.to_string());
+                    }
+                }
                 if cancelled {
                     emit_chat(
                         &app_task,
@@ -1463,6 +1539,7 @@ async fn get_chat_status(state: tauri::State<'_, AppState>) -> Result<serde_json
             "host": host,
             "detail": detail,
             "probe": probe,
+            "offload": state.offload_note.lock().unwrap().clone(),
         }));
     }
     let pid_n = pid.unwrap_or(0);
@@ -1491,8 +1568,47 @@ async fn get_chat_status(state: tauri::State<'_, AppState>) -> Result<serde_json
         "host": host,
         "detail": detail,
         "probe": probe,
+        "offload": state.offload_note.lock().unwrap().clone(),
     }))
 }
+#[tauri::command]
+fn storage_dirs() -> StorageRoots {
+    StorageRoots {
+        models: models_dir().display().to_string(),
+        outputs: outputs_dir().display().to_string(),
+    }
+}
+
+#[tauri::command]
+fn set_model_dir(path: String) -> Result<String, String> {
+    let path = PathBuf::from(path.trim());
+    writable_dir(&path)?;
+    let mut next = roots_slot().lock().unwrap().clone();
+    next.models = path.display().to_string();
+    save_roots(&next)?;
+    ensure_dirs();
+    Ok(moved_note("模型目录", &path))
+}
+
+#[tauri::command]
+fn set_output_dir(path: String) -> Result<String, String> {
+    let path = PathBuf::from(path.trim());
+    writable_dir(&path)?;
+    let mut next = roots_slot().lock().unwrap().clone();
+    next.outputs = path.display().to_string();
+    save_roots(&next)?;
+    ensure_dirs();
+    Ok(moved_note("作品目录", &path))
+}
+
+#[tauri::command]
+fn pick_folder() -> Result<String, String> {
+    match rfd::FileDialog::new().set_title("选择文件夹").pick_folder() {
+        Some(path) => Ok(path.display().to_string()),
+        None => Ok(String::new()),
+    }
+}
+
 #[tauri::command]
 fn open_folder(path: String) -> Result<String, String> {
     let p = if Path::new(&path).is_file() { Path::new(&path).parent().map(|x| x.to_path_buf()).unwrap_or_else(|| PathBuf::from(&path)) } else { PathBuf::from(&path) };
@@ -1548,36 +1664,168 @@ async fn engine_status() -> serde_json::Value {
         .unwrap()
 }
 
+fn kill_pid(pid: u32) {
+    let sys = System::new_all();
+    if let Some(proc) = sys.process(Pid::from_u32(pid)) {
+        let _ = proc.kill();
+    }
+}
+
+fn run_tool(state: &AppState, mut cmd: Command) -> Result<std::process::Output, String> {
+    state.media_cancel.store(false, Ordering::SeqCst);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = cmd.spawn().map_err(|e| format!("没能启动生成程序：{e}"))?;
+    let pid = child.id();
+    *state.media_pid.lock().unwrap() = Some(pid);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    let output = loop {
+        if state.media_cancel.load(Ordering::SeqCst) {
+            kill_pid(pid);
+        }
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(result) => break result.map_err(|e| format!("生成程序没有正常结束：{e}"))?,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                *state.media_pid.lock().unwrap() = None;
+                return Err("生成程序的结果丢了。".to_string());
+            }
+        }
+    };
+    *state.media_pid.lock().unwrap() = None;
+    if state.media_cancel.load(Ordering::SeqCst) {
+        return Err("已停止生成。没有把未完成的文件当成作品。".to_string());
+    }
+    Ok(output)
+}
+
+fn discard_output(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
+fn tool_error(output: &std::process::Output, prefix: &str) -> String {
+    let err = String::from_utf8_lossy(&output.stderr);
+    let text: String = err.chars().take(500).collect();
+    format!("{prefix}{text}")
+}
+
+pub fn ffmpeg_missing_message() -> String {
+    "本机没有 ffmpeg。动效视频要先安装 ffmpeg，装好后再点生成。这一版不会假装已经生成视频。".to_string()
+}
+
+fn ffmpeg_present() -> bool {
+    Command::new("ffmpeg")
+        .arg("-version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn b64(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut i = 0;
+    while i + 3 <= data.len() {
+        let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8) | data[i + 2] as u32;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(T[((n >> 6) & 63) as usize] as char);
+        out.push(T[(n & 63) as usize] as char);
+        i += 3;
+    }
+    if i < data.len() {
+        let a = data[i] as u32;
+        let b = if i + 1 < data.len() { data[i + 1] as u32 } else { 0 };
+        let n = (a << 16) | (b << 8);
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        if i + 1 < data.len() {
+            out.push(T[((n >> 6) & 63) as usize] as char);
+            out.push('=');
+        } else {
+            out.push('=');
+            out.push('=');
+        }
+    }
+    out
+}
+
 // ---------- 画图 / 视频 ----------
 #[tauri::command]
-fn generate_image(model: String, prompt: String, steps: u32, width: u32, height: u32) -> Result<String, String> {
+fn ffmpeg_status() -> String {
+    if ffmpeg_present() {
+        "本机找得到 ffmpeg。动效视频会用它，这是动效，不是扩散生成。".to_string()
+    } else {
+        ffmpeg_missing_message()
+    }
+}
+
+#[tauri::command]
+fn cancel_media(state: tauri::State<AppState>) -> String {
+    state.media_cancel.store(true, Ordering::SeqCst);
+    if let Some(pid) = *state.media_pid.lock().unwrap() {
+        kill_pid(pid);
+    }
+    "正在停止生成。未完成的文件不会当成作品。".to_string()
+}
+
+#[tauri::command]
+fn media_preview(path: String) -> Result<serde_json::Value, String> {
+    let path = PathBuf::from(path.trim());
+    let root = outputs_dir().canonicalize().map_err(|_| "作品目录还不存在，没有可预览的文件。".to_string())?;
+    let file = path.canonicalize().map_err(|_| "找不到这个作品文件。".to_string())?;
+    if !file.starts_with(&root) {
+        return Err("只能预览作品目录里的文件。".to_string());
+    }
+    let len = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+    if len > 12 * 1024 * 1024 {
+        return Err(format!("文件大约 {} MB，太大，本页不内嵌。请打开作品目录查看。", len / 1024 / 1024));
+    }
+    let bytes = fs::read(&file).map_err(|e| format!("读不到作品：{e}"))?;
+    let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    let (kind, mime) = match ext.as_str() {
+        "png" => ("image", "image/png"),
+        "jpg" | "jpeg" => ("image", "image/jpeg"),
+        "webp" => ("image", "image/webp"),
+        "mp4" => ("video", "video/mp4"),
+        _ => return Err("这个格式本页不预览。请打开作品目录查看。".to_string()),
+    };
+    Ok(serde_json::json!({
+        "kind": kind,
+        "data_url": format!("data:{mime};base64,{}", b64(&bytes)),
+        "path": file.display().to_string(),
+    }))
+}
+
+#[tauri::command]
+fn generate_image(state: tauri::State<AppState>, model: String, prompt: String, steps: u32, width: u32, height: u32) -> Result<String, String> {
     let bin = find_sd_cli().ok_or("还没安装画图引擎。请打开「运行」页安装后再试。")?;
     let model_path = models_dir().join(&model);
     if !model_path.exists() {
         return Err(format!("模型文件不存在：{}", model));
     }
+    let width = if width == 768 { 768 } else { 512 };
+    let height = if height == 768 { 768 } else { 512 };
     ensure_dirs();
     let out = outputs_dir().join(format!("img_{}.png", chrono_stamp()));
-    let output = Command::new(&bin)
-        .arg("-m")
-        .arg(&model_path)
-        .arg("-p")
-        .arg(&prompt)
-        .arg("--steps")
-        .arg(steps.to_string())
-        .arg("-W")
-        .arg(width.to_string())
-        .arg("-H")
-        .arg(height.to_string())
-        .arg("-o")
-        .arg(&out)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-m").arg(&model_path).arg("-p").arg(&prompt).arg("--steps").arg(steps.to_string())
+        .arg("-W").arg(width.to_string()).arg("-H").arg(height.to_string()).arg("-o").arg(&out);
+    let output = match run_tool(&state, cmd) {
+        Ok(output) => output,
+        Err(err) => {
+            discard_output(&out);
+            return Err(err);
+        }
+    };
     if !output.status.success() {
-        return Err(format!(
-            "画图失败：{}",
-            String::from_utf8_lossy(&output.stderr).chars().take(500).collect::<String>()
-        ));
+        discard_output(&out);
+        return Err(tool_error(&output, "画图失败："));
     }
     Ok(format!("已生成：{}", out.display()))
 }
@@ -1591,27 +1839,34 @@ fn chrono_stamp() -> String {
 }
 
 #[tauri::command]
-fn generate_motion_video(image: String, seconds: u32) -> Result<String, String> {
-    // ffmpeg 动效视频：不是扩散视频，界面上必须这样标注，不能冒充。
+fn generate_motion_video(state: tauri::State<AppState>, image: String, seconds: u32) -> Result<String, String> {
+    if !ffmpeg_present() {
+        return Err(ffmpeg_missing_message());
+    }
     ensure_dirs();
     let out = outputs_dir().join(format!("motion_{}.mp4", chrono_stamp()));
-    let output = Command::new("ffmpeg")
-        .args([
-            "-y", "-loop", "1", "-i", &image,
-            "-vf", &format!("scale=1280:720,zoompan=z='min(zoom+0.0015,1.5)':d={}:s=1280x720", seconds * 30),
-            "-t", &seconds.to_string(), "-pix_fmt", "yuv420p",
-        ])
-        .arg(&out)
-        .output()
-        .map_err(|_| "没有找到 ffmpeg，请先安装 ffmpeg 再试".to_string())?;
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args([
+        "-y", "-loop", "1", "-i", &image,
+        "-vf", &format!("scale=1280:720,zoompan=z='min(zoom+0.0015,1.5)':d={}:s=1280x720", seconds * 30),
+        "-t", &seconds.to_string(), "-pix_fmt", "yuv420p",
+    ]).arg(&out);
+    let output = match run_tool(&state, cmd) {
+        Ok(output) => output,
+        Err(err) => {
+            discard_output(&out);
+            return Err(err);
+        }
+    };
     if !output.status.success() {
-        return Err("ffmpeg 动效视频生成失败".to_string());
+        discard_output(&out);
+        return Err(tool_error(&output, "ffmpeg 动效失败："));
     }
     Ok(format!("已生成动效视频：{}", out.display()))
 }
 
 #[tauri::command]
-fn generate_diffusion_video(model: String, prompt: String, frames: u32) -> Result<String, String> {
+fn generate_diffusion_video(state: tauri::State<AppState>, model: String, prompt: String, frames: u32) -> Result<String, String> {
     let bin = find_sd_cli().ok_or("还没安装画图 / 视频引擎。请打开「运行」页安装后再试。")?;
     let model_path = models_dir().join(&model);
     if !model_path.exists() {
@@ -1619,24 +1874,19 @@ fn generate_diffusion_video(model: String, prompt: String, frames: u32) -> Resul
     }
     ensure_dirs();
     let out = outputs_dir().join(format!("vid_{}.mp4", chrono_stamp()));
-    let output = Command::new(&bin)
-        .arg("-M")
-        .arg("vid_gen")
-        .arg("-m")
-        .arg(&model_path)
-        .arg("-p")
-        .arg(&prompt)
-        .arg("--video-frames")
-        .arg(frames.to_string())
-        .arg("-o")
-        .arg(&out)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-M").arg("vid_gen").arg("-m").arg(&model_path).arg("-p").arg(&prompt)
+        .arg("--video-frames").arg(frames.to_string()).arg("-o").arg(&out);
+    let output = match run_tool(&state, cmd) {
+        Ok(output) => output,
+        Err(err) => {
+            discard_output(&out);
+            return Err(err);
+        }
+    };
     if !output.status.success() {
-        return Err(format!(
-            "扩散视频失败（需要 Wan 视频模型和足够显存）：{}",
-            String::from_utf8_lossy(&output.stderr).chars().take(500).collect::<String>()
-        ));
+        discard_output(&out);
+        return Err(tool_error(&output, "扩散视频失败（需要 Wan 视频模型和足够显存）："));
     }
     Ok(format!("已生成扩散视频：{}", out.display()))
 }
@@ -2245,6 +2495,9 @@ fn main() {
             probe: Mutex::new(ProbeNote::default()),
             download_busy: Mutex::new(false),
             download_cancel: AtomicBool::new(false),
+            offload_note: Mutex::new(String::new()),
+            media_cancel: AtomicBool::new(false),
+            media_pid: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_hardware,
@@ -2266,6 +2519,13 @@ fn main() {
             generate_image,
             generate_motion_video,
             generate_diffusion_video,
+            ffmpeg_status,
+            cancel_media,
+            media_preview,
+            storage_dirs,
+            set_model_dir,
+            set_output_dir,
+            pick_folder,
             agent_run,
             capture_chat_image,
             delete_model,

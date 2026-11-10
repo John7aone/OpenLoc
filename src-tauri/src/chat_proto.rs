@@ -24,6 +24,7 @@ pub struct SseParser {
     buf: String,
     raw: String,
     deltas: usize,
+    pub usage_tokens: Option<u32>,
 }
 
 impl SseParser {
@@ -65,6 +66,11 @@ impl SseParser {
             }
             if let Some(text) = delta_text(&v, &["reasoning_content", "reasoning"]) {
                 out.push(SsePiece::Reasoning(text));
+            }
+            if let Some(n) = v.pointer("/usage/completion_tokens").and_then(|x| x.as_u64()) {
+                if n > 0 && n <= u32::MAX as u64 {
+                    self.usage_tokens = Some(n as u32);
+                }
             }
         }
         out
@@ -175,6 +181,8 @@ pub fn chat_body(messages: &[ChatTurn], think: bool, stream: bool) -> Value {
         // 必须显式传 true/false。不传时 b12110 的 --reasoning auto 会按模板自己打开思考，
         // Qwen3.5 会停在未闭合的思考段里，把同一句问候改写很多遍，正文一直出不来。
         "chat_template_kwargs": {"enable_thinking": think},
+        // 流结束时带回 completion_tokens。引擎不认识这个字段会 400，再走不含它的退路。
+        "stream_options": {"include_usage": true},
     });
     if think {
         body["reasoning_budget_tokens"] = serde_json::json!(DEFAULT_REASONING_BUDGET);
@@ -204,7 +212,7 @@ pub fn chat_url(port: u16) -> String {
     format!("http://{LOOPBACK_HOST}:{port}/v1/chat/completions")
 }
 
-pub fn launch_args(model: &std::path::Path, port: u16, ctx: u32) -> Vec<String> {
+pub fn launch_args(model: &std::path::Path, port: u16, ctx: u32, gpu_layers: u32) -> Vec<String> {
     vec![
         "-m".to_string(),
         model.display().to_string(),
@@ -217,6 +225,8 @@ pub fn launch_args(model: &std::path::Path, port: u16, ctx: u32) -> Vec<String> 
         // 用 GGUF 里自带的 jinja chat template，结束标记跟着模型走。
         // 不传 --chat-template，避免用一套通用模板盖掉模型自己的。
         "--jinja".to_string(),
+        "-ngl".to_string(),
+        gpu_layers.to_string(),
     ]
 }
 
@@ -381,6 +391,7 @@ fn post_blocking(
 
 pub struct StreamOutcome {
     pub cancelled: bool,
+    pub completion_tokens: Option<u32>,
 }
 
 pub async fn open_and_read_stream(
@@ -455,7 +466,10 @@ pub async fn open_and_read_stream(
             on_piece(piece);
         }
     }
-    Ok(StreamOutcome { cancelled })
+    Ok(StreamOutcome {
+        cancelled,
+        completion_tokens: parser.usage_tokens,
+    })
 }
 
 async fn post_async(
@@ -724,8 +738,9 @@ mod tests {
 
     #[test]
     fn launch_and_urls_stay_on_loopback() {
-        let args = launch_args(std::path::Path::new("demo.gguf"), 18080, 4096);
+        let args = launch_args(std::path::Path::new("demo.gguf"), 18080, 4096, 12);
         assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
+        assert!(args.windows(2).any(|w| w == ["-ngl", "12"]));
         assert!(args.iter().any(|a| a == "--jinja"));
         assert!(!args.iter().any(|a| a == "--no-jinja" || a == "--chat-template" || a == "0.0.0.0" || a == "localhost"));
         assert!(health_url(8080).starts_with("http://127.0.0.1:8080/"));
@@ -780,6 +795,9 @@ mod tests {
                 SsePiece::Done,
             ]
         );
+        let mut usage = SseParser::default();
+        usage.push("data: {\"usage\":{\"completion_tokens\":12},\"choices\":[{\"delta\":{}}]}\n\n");
+        assert_eq!(usage.usage_tokens, Some(12));
     }
 
     #[test]

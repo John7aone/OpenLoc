@@ -113,5 +113,7 @@ test("设置页按区块排好，没有付费线路，侧栏仍是八项", () =>
   assert.match(html, /不会全盘搜索/);
   assert.match(html, /不会自动往后试别的端口/);
   assert.match(html, /顶部还不能改用这些接口/);
-  assert.match(html, /改到别的盘还没接上/);
+  assert.match(html, /不会自动搬家/);
+  assert.match(main, /set_model_dir/);
+  assert.match(main, /网页预览打不开系统文件夹对话框/);
 });
