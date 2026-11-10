@@ -779,6 +779,18 @@ function paintRunButtons(on, s) {
     card.style.display = "none";
   }
 }
+function paintProbe(probe) {
+  const text = probe && probe.message ? String(probe.message) : "";
+  const phase = probe && probe.phase ? String(probe.phase) : "";
+  const warn = phase === "empty" || phase === "repeat" || phase === "timeout" || phase === "failed";
+  for (const id of ["probe-run", "probe-chat"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.hidden = !text;
+    el.textContent = text;
+    el.classList.toggle("warn", warn && !!text);
+  }
+}
 function applyChatStatus(s) {
   const on = !!(s && s.running);
   const dot = document.getElementById("modelDot");
@@ -814,6 +826,7 @@ function applyChatStatus(s) {
     }
   }
   paintRunButtons(on, s);
+  paintProbe(s && s.probe);
 }
 async function refreshChatModel() {
   if (!hasTauri()) {
@@ -1560,6 +1573,13 @@ window.saveSettings = async function() {
     refreshImgEmpty();
     refreshVidEmpty();
     setInterval(function() { refreshChatModel(); }, 4000);
+    const listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
+    if (typeof listen === "function") {
+      listen("openloc-probe", function(ev) {
+        const payload = ev && ev.payload ? ev.payload : ev;
+        paintProbe(payload);
+      });
+    }
   };
   if (typeof requestAnimationFrame === "function") {
     requestAnimationFrame(function() { requestAnimationFrame(startShellWork); });

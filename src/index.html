@@ -163,6 +163,7 @@
 <button class="sec" id="stopBtn" type="button" onclick="stopRunModel()" style="display:none">停止模型</button>
 <button class="sec" id="chatBtn" type="button" onclick="tab('chat', document.querySelector('#nav [data-page=chat]'))" style="display:none">开始对话</button>
 <div id="runmsg" class="muted"></div>
+<p id="probe-run" class="probe-note" role="status" hidden></p>
 </div>
 </div>
 <div class="card" id="runcard" style="display:none"><b id="run-title">运行中</b><p class="muted" id="run-sub">实际按空闲显存自动分配</p>
@@ -188,6 +189,7 @@
 </div>
 </div>
 <div id="chat-service-line" class="muted small">正在确认本机聊天服务…</div>
+<p id="probe-chat" class="probe-note" role="status" hidden></p>
 <div id="chatbox" class="chatbox">
 <div id="chat-empty" class="chat-empty">
 <b>有什么可以帮你？</b>

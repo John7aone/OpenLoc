@@ -106,6 +106,20 @@ a:hover { text-decoration: underline; }
 }
 .small { font-size: var(--fs-3); }
 .muted { color: var(--muted); }
+.probe-note {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: var(--fs-3);
+  line-height: 1.45;
+}
+.probe-note.warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-elev));
+}
 
 nav { display: flex; flex-direction: column; gap: 4px; }
 nav button {

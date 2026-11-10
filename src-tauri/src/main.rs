@@ -35,6 +35,25 @@ struct AppState {
     /// 托盘菜单「退出」会先把这个标成 true，关窗口时就不再隐藏到托盘。
     quitting: AtomicBool,
     chat_gen: AtomicU64,
+    /// 用户开始真正对话或停止模型时置位，后台试答会把连接让出来。
+    probe_stop: AtomicBool,
+    probe_gen: AtomicU64,
+    probe: Mutex<ProbeNote>,
+}
+
+#[derive(Clone, Serialize)]
+struct ProbeNote {
+    phase: String,
+    message: String,
+}
+
+impl Default for ProbeNote {
+    fn default() -> Self {
+        Self {
+            phase: "idle".into(),
+            message: String::new(),
+        }
+    }
 }
 
 // ---------- 目录 ----------
@@ -905,6 +924,50 @@ struct ChatStreamEvent {
     text: String,
 }
 
+fn emit_probe(app: &tauri::AppHandle, note: &ProbeNote) {
+    let _ = app.emit("openloc-probe", note);
+}
+
+fn schedule_warmup(app: tauri::AppHandle, port: u16) {
+    let gen = {
+        let state = app.state::<AppState>();
+        let gen = state.probe_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        state.probe_stop.store(false, Ordering::SeqCst);
+        let note = ProbeNote {
+            phase: "running".into(),
+            message: chat_proto::warmup_running_message(),
+        };
+        *state.probe.lock().unwrap() = note.clone();
+        emit_probe(&app, &note);
+        gen
+    };
+    tauri::async_runtime::spawn(async move {
+        let app_stop = app.clone();
+        let report = chat_proto::run_warmup(port, chat_proto::WARMUP_TIMEOUT, move || {
+            let state = app_stop.state::<AppState>();
+            state.probe_gen.load(Ordering::SeqCst) != gen
+                || state.probe_stop.load(Ordering::SeqCst)
+                || !*state.chat_running.lock().unwrap()
+        })
+        .await;
+        let state = app.state::<AppState>();
+        if state.probe_gen.load(Ordering::SeqCst) != gen {
+            return;
+        }
+        let running = *state.chat_running.lock().unwrap();
+        let note = if !running {
+            ProbeNote::default()
+        } else {
+            ProbeNote {
+                phase: report.phase.as_str().into(),
+                message: report.message,
+            }
+        };
+        *state.probe.lock().unwrap() = note.clone();
+        emit_probe(&app, &note);
+    });
+}
+
 fn emit_chat(app: &tauri::AppHandle, id: u64, kind: &str, text: impl Into<String>) {
     let _ = app.emit(
         "openloc-chat",
@@ -917,7 +980,13 @@ fn emit_chat(app: &tauri::AppHandle, id: u64, kind: &str, text: impl Into<String
 }
 
 #[tauri::command]
-fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32, port: Option<u16>) -> Result<String, String> {
+fn start_chat(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    model: String,
+    ctx: u32,
+    port: Option<u16>,
+) -> Result<String, String> {
     let port = port.unwrap_or(LLAMA_PORT);
     if port == 0 {
         return Err("端口无效。下一步：在设置里填写 1 到 65535 之间的空闲端口并保存。".to_string());
@@ -983,6 +1052,7 @@ fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32, port: Opti
             && chat_proto::ready_to_mark_running(true, true)
         {
             *state.chat_running.lock().unwrap() = true;
+            schedule_warmup(app.clone(), port);
             return Ok(format!(
                 "聊天服务已启动：{model}（仅 127.0.0.1:{port}，健康检查已通过）"
             ));
@@ -1003,6 +1073,7 @@ fn start_chat(state: tauri::State<AppState>, model: String, ctx: u32, port: Opti
 #[tauri::command]
 fn stop_chat(state: tauri::State<AppState>) -> Result<String, String> {
     state.chat_gen.fetch_add(1, Ordering::SeqCst);
+    state.probe_stop.store(true, Ordering::SeqCst);
     let pid = state.chat_pid.lock().unwrap().take();
     let n = stop_our_llama(pid);
     *state.chat_running.lock().unwrap() = false;
@@ -1020,6 +1091,7 @@ fn chat_ask(
     messages: Option<Vec<ChatIn>>,
     think: Option<bool>,
 ) -> Result<String, String> {
+    state.probe_stop.store(true, Ordering::SeqCst);
     let port = require_running(&state)?;
     let turns = chat_turns_from(message, messages)?;
     chat_proto::complete_chat(port, &turns, think.unwrap_or(false))
@@ -1033,6 +1105,7 @@ async fn chat_stream(
     think: Option<bool>,
     stream_id: u64,
 ) -> Result<(), String> {
+    state.probe_stop.store(true, Ordering::SeqCst);
     let port = *state.chat_port.lock().unwrap();
     let running = *state.chat_running.lock().unwrap();
     if !running || port == 0 {
@@ -1112,12 +1185,14 @@ async fn get_chat_status(state: tauri::State<'_, AppState>) -> Result<serde_json
         } else {
             format!("未运行。上次选择的模型：{model}。下一步：打开「运行」页重新启动。")
         };
+        let probe = state.probe.lock().unwrap().clone();
         return Ok(serde_json::json!({
             "running": false,
             "model": model,
             "port": port,
             "host": host,
             "detail": detail,
+            "probe": probe,
         }));
     }
     let pid_n = pid.unwrap_or(0);
@@ -1138,12 +1213,14 @@ async fn get_chat_status(state: tauri::State<'_, AppState>) -> Result<serde_json
     } else {
         format!("进程还在，但 127.0.0.1:{port} 健康检查未通过。下一步：看 data/logs/llama-server.log，或停止后重新启动。本次状态已改为未运行。")
     };
+    let probe = state.probe.lock().unwrap().clone();
     Ok(serde_json::json!({
         "running": running,
         "model": model,
         "port": port,
         "host": host,
         "detail": detail,
+        "probe": probe,
     }))
 }
 #[tauri::command]
@@ -1893,6 +1970,9 @@ fn main() {
             tray_enabled: Mutex::new(true),
             quitting: AtomicBool::new(false),
             chat_gen: AtomicU64::new(0),
+            probe_stop: AtomicBool::new(false),
+            probe_gen: AtomicU64::new(0),
+            probe: Mutex::new(ProbeNote::default()),
         })
         .invoke_handler(tauri::generate_handler![
             get_hardware,
