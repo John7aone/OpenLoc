@@ -39,6 +39,15 @@
       return { kind: "preview", shown: shown, modelText: modelText, reply: reply, search: false };
     }
     if (webOn) {
+      if (input && input.searchPlugin === false) {
+        return {
+          kind: "check-service",
+          shown: shown,
+          modelText: modelText,
+          search: false,
+          note: "网络搜索插件没有启用。到对话的「工具」里安装并打开后再查。这次没有访问网络，也不会编造搜索结果。",
+        };
+      }
       return { kind: "search", shown: shown, modelText: modelText, query: raw, search: true };
     }
     return { kind: "check-service", shown: shown, modelText: modelText, search: false };

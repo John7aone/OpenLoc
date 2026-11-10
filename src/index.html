@@ -216,7 +216,7 @@
 <div class="composer-tools">
 <button type="button" class="toolbtn" onclick="pickAttach()" title="添加附件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5l6.2-6.2a3 3 0 014.2 4.2l-7.4 7.4a4.5 4.5 0 01-6.4-6.4l6.8-6.8"/></svg>附件</button>
 <button type="button" class="toolbtn" id="shotBtn" onclick="captureForChat()" title="框选一块区域，确认后加入当前对话。取消则不贴图。网页预览不能真的截图。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
-<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
+<button type="button" class="toolbtn" onclick="toggleTools()" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
 <button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="操作电脑"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>操作电脑</button>
 <button type="button" class="toolbtn" onclick="tab('img', document.querySelector('#nav [data-page=img]'))" title="画图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l5-4 3 3 3-2 3 3"/></svg>画图</button>
 <button type="button" class="toolbtn" onclick="tab('vid', document.querySelector('#nav [data-page=vid]'))" title="视频"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9.2l5 2.8-5 2.8z"/></svg>视频</button>
@@ -224,12 +224,24 @@
 </div>
 <button type="button" class="sendbtn" id="sendBtn" onclick="onSendClick()" title="发送" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></svg></button>
 </div>
+<div id="tool-panel" class="tool-panel" hidden>
+<p class="muted small">插件装在本机。点安装之前，卡片上写明它会访问网络，还是只读你选中的文件。从 GitHub 安装时只收下清单，不执行仓库里的脚本。</p>
+<div id="plugin-list"></div>
+<label>公开仓库 <input id="plugin-repo" placeholder="owner/repo 或 https://github.com/owner/repo" autocomplete="off"></label>
+<div class="row">
+<button type="button" class="sec" onclick="previewPluginRepo()">查看权限</button>
+<button type="button" id="plugin-confirm" onclick="confirmPluginRepo()" hidden>确认安装</button>
+<button type="button" class="sec" onclick="pickReadFolder()">选择要读的文件夹</button>
+</div>
+<p id="plugin-preview" class="muted small"></p>
+<p id="read-scope" class="muted small">还没有选择文件夹。附件里带完整路径的文件也会交给读文件插件。不会扫描整盘。</p>
+</div>
 <div id="composer-note" class="composer-note" role="status" aria-live="polite" hidden></div>
 <div class="composer-foot">
 <label class="ctx-line">上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384" selected>16K</option><option value="32768">32K</option></select></label>
 </div>
 </div>
-<input id="chatfile" type="file" multiple accept="image/*,.txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.gif">
+<input id="chatfile" type="file" multiple accept="image/*,.txt,.md,.pdf,.docx,.json,.csv,.html,.png,.jpg,.jpeg,.webp,.gif">
 </div>
 </div>
 </div>
@@ -437,6 +449,11 @@
 <div id="bglist"><p class="muted">点刷新，看 OpenLoc 现在在后台跑着哪些程序。网页预览没有这些进程。</p></div>
 </div>
 <div class="setcard">
+<h3>插件</h3>
+<p class="muted small">安装、启用和卸载都在这里，也在对话的「工具」里。不会新增侧栏。从 GitHub 来的插件只认清单，不执行脚本。</p>
+<div id="settings-plugin-list"></div>
+</div>
+<div class="setcard">
 <div class="setcard-head">
 <h3>第三方 API</h3>
 <button type="button" onclick="openApiForm()">添加 API</button>
@@ -471,6 +488,7 @@
 <script src="chat-flow.js"></script>
 <script src="sessions.js"></script>
 <script src="speed-note.js"></script>
+<script src="plugins.js"></script>
 <script src="settings-prefs.js"></script>
 <script src="download-plan.js"></script>
 <script src="main.js"></script>

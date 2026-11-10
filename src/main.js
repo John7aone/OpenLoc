@@ -160,14 +160,19 @@ function onChatFiles(ev) {
       name: f.name,
       kind: image ? "image" : "file",
       url: image ? URL.createObjectURL(f) : "",
-      path: "",
+      path: f.path || "",
       mode: "",
       source: "file",
     });
   }
   input.value = "";
   renderAttachments();
-  if (files.length) setComposerNote("已加入当前对话附件。发送时只记下文件名：图片不会上传，本地模型目前只接收文字。");
+  if (files.length) {
+    const named = files.some((f) => f.path);
+    setComposerNote(named
+      ? "已加入当前对话附件。读文件插件启用后，才会读取带完整路径的文本；图片仍然不能识图。"
+      : "已加入当前对话附件。这次没有完整路径，所以不会读取正文。图片不会上传。");
+  }
 }
 function getPort() { try { return parseInt(localStorage.getItem('openloc-port') || '8080'); } catch (e) { return 8080; } }
 window.tab = function(id, btn) {
@@ -186,7 +191,7 @@ window.tab = function(id, btn) {
   if (id === "cat") loadCatalog();
   if (id === "chat" || id === "img" || id === "vid" || id === "md") loadModels();
   if (id === "md") { updatePlan(); loadEngineStatus(); }
-  if (id === "settings") loadEngineStatus();
+  if (id === "settings") { loadEngineStatus(); refreshPlugins(); }
   if (id === "img") refreshImgEmpty();
   if (id === "vid") refreshVidEmpty();
 };
@@ -1295,6 +1300,130 @@ window.cancelSend = async function() {
   try { await invoke("cancel_chat"); }
   catch (e) { setComposerNote("停止请求没有送到本机服务：" + OpenLocChat.errText(e) + "。界面已不再等待后续文字。"); }
 };
+let pluginCards = [];
+let readRoots = [];
+let pendingRepo = "";
+function pluginEnabled(id) {
+  return pluginCards.some((card) => card && card.id === id && card.installed && card.enabled);
+}
+function pluginCardHtml(card) {
+  const perm = card.permission_text || card.permissionText || "";
+  const buttons = [];
+  if (!card.installed && (card.id === "web-search" || card.id === "read-files")) {
+    buttons.push(`<button type="button" onclick="installBuiltin('${escHtml(card.id)}')">安装</button>`);
+  }
+  if (card.installed) {
+    buttons.push(`<button type="button" class="sec" onclick="togglePlugin('${escHtml(card.id)}', ${card.enabled ? "false" : "true"})">${card.enabled ? "停用" : "启用"}</button>`);
+    buttons.push(`<button type="button" class="sec" onclick="uninstallPlugin('${escHtml(card.id)}')">卸载</button>`);
+  }
+  return `<article class="plugin-card"><div><b>${escHtml(card.name)}</b><div class="muted small">${escHtml(card.blurb || "")}</div><div class="muted small">${escHtml(perm)}</div></div><div class="row">${buttons.join("")}</div></article>`;
+}
+function renderPluginMounts() {
+  const html = pluginCards.length ? pluginCards.map(pluginCardHtml).join("") : "<p class='muted small'>还没有可安装的插件。</p>";
+  for (const id of ["plugin-list", "settings-plugin-list"]) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = html;
+  }
+}
+async function refreshPlugins() {
+  if (!window.OpenLocPlugins) return;
+  if (!hasTauri()) {
+    pluginCards = OpenLocPlugins.catalog().map((card) => Object.assign({ installed: false, enabled: false, source: "builtin" }, card));
+  } else {
+    try { pluginCards = await invoke("list_plugins"); }
+    catch (e) { pluginCards = []; setComposerNote("没能读取本机插件：" + e); }
+  }
+  renderPluginMounts();
+}
+window.toggleTools = function() {
+  const panel = document.getElementById("tool-panel");
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) refreshPlugins();
+};
+window.installBuiltin = async function(id) {
+  if (!hasTauri()) { setComposerNote("网页预览不会把插件装到本机。"); return; }
+  try { setComposerNote(await invoke("install_builtin_plugin", { id: id })); }
+  catch (e) { setComposerNote(String(e)); }
+  await refreshPlugins();
+};
+window.togglePlugin = async function(id, enabled) {
+  if (!hasTauri()) return;
+  try { setComposerNote(await invoke("set_plugin_enabled", { id: id, enabled: enabled })); }
+  catch (e) { setComposerNote(String(e)); }
+  await refreshPlugins();
+};
+window.uninstallPlugin = async function(id) {
+  if (!hasTauri()) return;
+  try { setComposerNote(await invoke("uninstall_plugin", { id: id })); }
+  catch (e) { setComposerNote(String(e)); }
+  await refreshPlugins();
+};
+window.previewPluginRepo = async function() {
+  const raw = (document.getElementById("plugin-repo") || {}).value || "";
+  const parsed = OpenLocPlugins.parseRepo(raw);
+  const el = document.getElementById("plugin-preview");
+  const btn = document.getElementById("plugin-confirm");
+  pendingRepo = "";
+  if (btn) btn.hidden = true;
+  if (!parsed.ok) { if (el) el.textContent = parsed.error; return; }
+  if (!hasTauri()) { if (el) el.textContent = "网页预览不会从 GitHub 安装，也不会执行仓库脚本。"; return; }
+  try {
+    const card = await invoke("preview_github_plugin", { repo: raw.trim() });
+    pendingRepo = raw.trim();
+    if (el) el.textContent = "将安装「" + card.name + "」。" + (card.permission_text || "") + " 确认后才写入本机，不会执行仓库里的脚本。";
+    if (btn) btn.hidden = false;
+  } catch (e) { if (el) el.textContent = String(e); }
+};
+window.confirmPluginRepo = async function() {
+  if (!pendingRepo) return;
+  try { setComposerNote(await invoke("install_github_plugin", { repo: pendingRepo })); }
+  catch (e) { setComposerNote(String(e)); }
+  pendingRepo = "";
+  const btn = document.getElementById("plugin-confirm");
+  if (btn) btn.hidden = true;
+  await refreshPlugins();
+};
+function setReadScope(text) {
+  const el = document.getElementById("read-scope");
+  if (el) el.textContent = text;
+}
+window.pickReadFolder = async function() {
+  if (!hasTauri()) { setReadScope("网页预览不能选择本机文件夹，也不会扫描磁盘。"); return; }
+  try {
+    const path = await invoke("pick_folder");
+    if (!path) { setReadScope("没有选择文件夹。范围不变，不会扫描整盘。"); return; }
+    readRoots = [path];
+    setReadScope("这次只读这个文件夹这一层的文件：" + path + "。不会扫描整盘。");
+  } catch (e) { setReadScope("没能选择文件夹：" + e); }
+};
+async function searchFollowup(query) {
+  if (!pluginEnabled("web-search")) {
+    addMsg("ai", "网络搜索插件没有启用。模型要求查网，但这次没有访问网络。");
+    return;
+  }
+  if (!hasTauri()) {
+    addMsg("ai", "网页预览不会真的搜索，也不会编造来源。");
+    return;
+  }
+  let found = "";
+  try { found = await invoke("plugin_search", { query: query }); }
+  catch (e) { addMsg("ai", "网络搜索没有完成：" + e); return; }
+  addMsg("ai", "网络搜索插件返回的来源（不是模型编造）：\n" + found);
+  try {
+    const reply = await invoke("chat_ask", {
+      message: "",
+      messages: chatTurns.concat([{ role: "user", content: "请只根据这些搜索结果回答，不要编造来源里没有的事实：\n" + found }]),
+      think: thinkOn(),
+    });
+    addMsg("ai", reply || "（本地模型返回了空内容）");
+    if (reply) {
+      chatTurns.push({ role: "user", content: "搜索结果：\n" + found });
+      chatTurns.push({ role: "assistant", content: reply });
+      persistCurrent();
+    }
+  } catch (e) { addMsg("ai", "搜索结果没有发给模型：" + e); }
+}
 window.sendChat = async function() {
   if (sending) return;
   const raw = document.getElementById("chatin").value.trim();
@@ -1304,6 +1433,7 @@ window.sendChat = async function() {
     attachmentNames: atts.map((a) => a.name),
     webOn: webOn,
     hasTauri: hasTauri(),
+    searchPlugin: pluginEnabled("web-search"),
   });
   if (plan.kind === "empty") return;
   document.getElementById("chatin").value = "";
@@ -1315,9 +1445,24 @@ window.sendChat = async function() {
     return;
   }
   let modelText = plan.modelText;
+  if (plan.note) addMsg("ai", plan.note);
+  const read = window.OpenLocPlugins ? OpenLocPlugins.readPlan({
+    enabled: pluginEnabled("read-files"),
+    paths: atts.map((a) => a.path).filter(Boolean).concat(readRoots),
+  }) : { shouldRead: false, note: "" };
+  if (read.note) addMsg("ai", read.note);
+  if (read.shouldRead && hasTauri()) {
+    try {
+      const excerpt = await invoke("plugin_read_files", { paths: read.paths });
+      addMsg("ai", excerpt);
+      modelText = "下面是你选中的本机文件摘录，不是模型编造：\n" + excerpt + "\n\n用户问题：" + modelText;
+    } catch (e) { addMsg("ai", "没有读完选中的文件：" + e); }
+  } else if (pluginEnabled("web-search") && plan.kind !== "search") {
+    modelText += "\n（网络搜索插件已启用。若需要网页上的新信息，只回复一行 [[search: 关键词]]。）";
+  }
   if (plan.kind === "search") {
     try {
-      const res = await invoke("web_search", { query: plan.query });
+      const res = await invoke("plugin_search", { query: plan.query });
       const applied = OpenLocChat.afterSearch(modelText, { ok: true, text: res });
       if (applied.note) addMsg("ai", applied.note);
       modelText = applied.modelText;
@@ -1352,6 +1497,7 @@ window.sendChat = async function() {
     activeReply.state = OpenLocChat.reduceStream(activeReply.state, ev);
     paintActive();
   };
+  let followQuery = "";
   try {
     const listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
     if (typeof listen === "function") {
@@ -1385,6 +1531,8 @@ window.sendChat = async function() {
       chatTurns.push({ role: "assistant", content: activeReply.state.text });
       rememberSpeed(streamMeta);
       persistCurrent();
+      const call = window.OpenLocPlugins && OpenLocPlugins.toolCall(activeReply.state.text);
+      if (call) followQuery = call.query;
     }
   } catch (e) {
     take({ kind: "error", text: OpenLocChat.errText(e) });
@@ -1392,6 +1540,7 @@ window.sendChat = async function() {
     if (activeReply && activeReply.gen === gen) activeReply = null;
     if (gen === sendGen) setSending(false);
   }
+  if (followQuery) await searchFollowup(followQuery);
 };
 document.getElementById("chatin") && document.getElementById("chatin").addEventListener("keydown", function(e) {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!sending) sendChat(); }
@@ -1848,6 +1997,7 @@ window.saveSettings = async function() {
     loadFfmpegNote();
     readSessions();
     renderSessions();
+    refreshPlugins();
     refreshImgEmpty();
     refreshVidEmpty();
     setInterval(function() { refreshChatModel(); }, 4000);
