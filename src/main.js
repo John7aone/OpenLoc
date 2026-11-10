@@ -290,6 +290,7 @@ window.loadHw = async function() {
     "检测到：" + h.gpu + (vram ? "（" + vramText + "）" : "（无独立显存）")
   );
   loadRecommended();
+  if (catalogIsOpen() && catalogCache.length) renderCatalog();
 };
 function paintGpuCard(name, info, detected) {
   const n = document.getElementById("gpu-name");
@@ -389,10 +390,14 @@ function recommendList(models) {
   const small = smallerModels(models);
   return (small.length ? small : models).slice(0, 3);
 }
+function catalogIsOpen() {
+  const cat = document.getElementById("cat");
+  return !!(cat && cat.classList.contains("on"));
+}
 window.loadRecommended = async function() {
   const el = document.getElementById("recmodels"); if (!el) return;
   let models;
-  try { models = await invoke("get_catalog_with_fit"); }
+  try { models = await invoke("get_catalog"); }
   catch (e) { models = localModels(); }
   rememberModels(models);
   models = withView(models);
@@ -407,7 +412,7 @@ window.loadRecommended = async function() {
   else if (!hw.detected) head = "<p class='muted small'>还没有读到这台电脑的硬件。速度写「约估不可用」，不把目录当成已经适合你。</p>";
   else if (!anySmooth) head = "<p class='muted small'>这些模型的整份权重放不进当前显存。下面是较小的几个，速度是约估，不是实测。</p>";
   el.innerHTML = head + list.map((m, i) => cardHtml(m, i === 0)).join("");
-  if (note) {
+  if (note && !catalogIsOpen()) {
     if (!hw.detected) {
       note.hidden = false;
       note.textContent = hw.preview
@@ -425,7 +430,7 @@ window.loadRecommended = async function() {
 window.loadCatalog = async function() {
   const el = document.getElementById("catalog");
   if (el) el.textContent = "加载中…";
-  try { catalogCache = await invoke("get_catalog_with_fit"); }
+  try { catalogCache = await invoke("get_catalog"); }
   catch (e) { catalogCache = localModels(); }
   renderCatalog();
 };
@@ -1546,8 +1551,19 @@ window.saveSettings = async function() {
     else if (msg) msg.textContent = "只拿到文件名「" + f.name + "」，没有完整路径，所以没有导入。请把路径填在输入框里，或用桌面版。";
     this.value = "";
   });
-  loadImgModels();
-  loadHw(); loadModels(); loadEngineStatus();
-  refreshImgEmpty(); refreshVidEmpty();
-  setInterval(function() { refreshChatModel(); }, 4000);
+  // 先让窗口画出概览，再去读硬件、模型和引擎。这些调用在主线程上会把窗口冻住。
+  const startShellWork = function() {
+    loadImgModels();
+    loadHw();
+    loadModels();
+    loadEngineStatus();
+    refreshImgEmpty();
+    refreshVidEmpty();
+    setInterval(function() { refreshChatModel(); }, 4000);
+  };
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(function() { requestAnimationFrame(startShellWork); });
+  } else {
+    setTimeout(startShellWork, 0);
+  }
 })();
