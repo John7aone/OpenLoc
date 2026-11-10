@@ -28,6 +28,11 @@
 <main class="main">
 <div id="preview-banner" class="preview-banner">网页预览：可以看各页布局。硬件数字、下载和启动引擎不会在浏览器里真的执行。桌面版 OpenLoc 才会做这些事。</div>
 <div id="action-note" class="composer-note" hidden></div>
+<div id="dl-dock" class="dl-dock" hidden>
+<p id="dl-dock-text">正在准备下载…</p>
+<div class="bar"><div id="dl-dock-bar" class="fill" style="width:0"></div></div>
+<button class="sec" type="button" id="dl-cancel" onclick="cancelDownload()">取消下载</button>
+</div>
 <div class="steps">
 <div class="step" id="step-hw"><span class="num" id="step-hw-num">1</span><div class="step-copy"><b>看本机硬件</b><small id="step-hw-sub">正在检测…</small></div><span class="status" id="step-hw-status">检测中</span></div>
 <div class="step" id="step-engine"><span class="num">2</span><div class="step-copy"><b>装 / 启引擎</b><small id="step-engine-sub">安装和启动在运行页</small></div><button type="button" class="sec" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行</button></div>
@@ -454,6 +459,7 @@
 <script src="hf-search.js"></script>
 <script src="chat-flow.js"></script>
 <script src="settings-prefs.js"></script>
+<script src="download-plan.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

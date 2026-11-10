@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod chat_proto;
+mod download_job;
 mod engine_io;
 mod region_shot;
 
@@ -39,6 +40,8 @@ struct AppState {
     probe_stop: AtomicBool,
     probe_gen: AtomicU64,
     probe: Mutex<ProbeNote>,
+    download_busy: Mutex<bool>,
+    download_cancel: AtomicBool,
 }
 
 #[derive(Clone, Serialize)]
@@ -765,6 +768,273 @@ fn finalize_download(dest: &Path, filename: &str, kind: &str) -> Result<String, 
         };
     }
     Ok(format!("已下载：{filename}"))
+}
+
+#[derive(Clone, Deserialize)]
+struct DownloadPart {
+    url: String,
+    filename: String,
+    bytes: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct DownloadEvent {
+    phase: String,
+    message: String,
+    received: u64,
+    total: u64,
+}
+
+fn emit_download(app: &tauri::AppHandle, phase: &str, message: impl Into<String>, received: u64, total: u64) {
+    let _ = app.emit(
+        "openloc-download",
+        DownloadEvent {
+            phase: phase.to_string(),
+            message: message.into(),
+            received,
+            total,
+        },
+    );
+}
+
+fn https_download_url(url: &str) -> Result<(), String> {
+    if url.starts_with("https://") && url.len() <= 2000 && !url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        Ok(())
+    } else {
+        Err("下载地址必须是 https，这次没有开始。".to_string())
+    }
+}
+
+fn remote_length(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    token: &Option<String>,
+    token_host: Option<&str>,
+) -> Option<u64> {
+    let mut req = client
+        .head(url)
+        .timeout(Duration::from_secs(20))
+        .header("User-Agent", "OpenLoc");
+    req = apply_hf_auth(req, url, token, token_host);
+    let resp = req.send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.content_length().filter(|n| *n > 0)
+}
+
+fn free_bytes_at(path: &Path) -> Result<u64, String> {
+    let disks = Disks::new_with_refreshed_list();
+    let mounts: Vec<(String, u64)> = disks
+        .iter()
+        .map(|d| (d.mount_point().to_string_lossy().to_string(), d.available_space()))
+        .collect();
+    let view: Vec<(&str, u64)> = mounts.iter().map(|(m, n)| (m.as_str(), *n)).collect();
+    download_job::free_on_mounts(&path.to_string_lossy(), &view)
+        .ok_or_else(|| "没能读到目标盘的可用空间，这次没有开始下载。".to_string())
+}
+
+fn perform_download(
+    app: &tauri::AppHandle,
+    parts: &[DownloadPart],
+    kind: &str,
+    hf_token: Option<String>,
+    token_host: Option<String>,
+) -> Result<String, String> {
+    if kind != "model" && kind != "engine" {
+        return Err("下载类型不对，这次没有开始。".to_string());
+    }
+    let token = clean_hf_token(hf_token)?;
+    let host = token_host.clone();
+    ensure_dirs();
+    let dir = if kind == "model" { models_dir() } else { engines_dir() };
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建目录：{e}"))?;
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .timeout(Duration::from_secs(6 * 60 * 60))
+        .build()
+        .map_err(|e| format!("下载客户端创建失败：{e}"))?;
+    let mut planned: Vec<(DownloadPart, PathBuf, u64)> = Vec::new();
+    for part in parts {
+        https_download_url(&part.url)?;
+        if part.filename.trim().is_empty() || part.filename.len() > 240 {
+            return Err("文件名不对，这次没有开始下载。".to_string());
+        }
+        let dest = engine_io::safe_join(&dir, part.filename.trim())?;
+        let remote = remote_length(&client, &part.url, &token, host.as_deref());
+        let Some(len) = download_job::pick_length(part.bytes, remote) else {
+            return Err(download_job::missing_size_message(&part.filename));
+        };
+        planned.push((part.clone(), dest, len));
+    }
+    let need: u64 = planned.iter().map(|(_, _, n)| *n).sum();
+    let free = free_bytes_at(&dir)?;
+    if let Some(reason) = download_job::space_refusal(free, need) {
+        emit_download(app, "refused", &reason, 0, need);
+        return Err(reason);
+    }
+    let total_all = need;
+    let mut received_before = 0u64;
+    let mut saved: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let mut wrote_new = false;
+    let count = planned.len();
+    for (index, (part, dest, len)) in planned.iter().enumerate() {
+        if app.state::<AppState>().download_cancel.load(Ordering::SeqCst) {
+            let message = download_job::cancel_message(saved.len());
+            emit_download(app, "cancelled", &message, received_before, total_all);
+            return Ok(message);
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("无法创建目录：{e}"))?;
+        }
+        if dest.is_file() {
+            let have = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+            if have == *len {
+                saved.push(dest.display().to_string());
+                received_before = received_before.saturating_add(*len);
+                continue;
+            }
+            fs::remove_file(dest).map_err(|e| format!("删不掉没下完的文件：{e}"))?;
+            notes.push(download_job::removed_partial_note(&part.filename));
+        }
+        let mut req = client.get(&part.url).header("User-Agent", "OpenLoc");
+        req = apply_hf_auth(req, &part.url, &token, host.as_deref());
+        let mut resp = req.send().map_err(|e| format!("下载失败：{e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("下载失败：HTTP {}", resp.status()));
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("无法创建目录：{e}"))?;
+        }
+        let mut file = fs::File::create(dest).map_err(|e| format!("无法写入文件：{e}"))?;
+        let started = Instant::now();
+        let mut last_emit = Instant::now() - Duration::from_secs(1);
+        let app_emit = app.clone();
+        let name = part.filename.clone();
+        let file_len = *len;
+        let base = received_before;
+        let end = download_job::copy_counted(
+            &mut resp,
+            &mut file,
+            file_len,
+            || app.state::<AppState>().download_cancel.load(Ordering::SeqCst),
+            |got| {
+                if last_emit.elapsed() < Duration::from_millis(200) && got < file_len {
+                    return;
+                }
+                last_emit = Instant::now();
+                let elapsed = started.elapsed().as_millis().max(1) as u64;
+                let bps = got.saturating_mul(1000) / elapsed;
+                let message = download_job::progress_label(&name, index + 1, count, got, file_len, bps);
+                emit_download(&app_emit, "progress", message, base.saturating_add(got), total_all);
+            },
+        );
+        drop(file);
+        match end {
+            Ok(download_job::CopyStop::Finished) => {
+                #[cfg(unix)]
+                if kind == "engine" {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(dest, fs::Permissions::from_mode(0o755));
+                }
+                if kind == "engine" && part.filename.to_lowercase().ends_with(".zip") {
+                    match finalize_download(dest, &part.filename, kind) {
+                        Ok(text) => notes.push(text),
+                        Err(err) => {
+                            emit_download(app, "error", &err, base.saturating_add(file_len), total_all);
+                            return Err(err);
+                        }
+                    }
+                }
+                saved.push(dest.display().to_string());
+                received_before = received_before.saturating_add(file_len);
+                wrote_new = true;
+            }
+            Ok(download_job::CopyStop::Cancelled) => {
+                let _ = fs::remove_file(dest);
+                let message = download_job::cancel_message(saved.len());
+                emit_download(app, "cancelled", &message, base, total_all);
+                return Ok(message);
+            }
+            Err(err) => {
+                let _ = fs::remove_file(dest);
+                emit_download(app, "error", &err, base, total_all);
+                return Err(err);
+            }
+        }
+    }
+    let mut message = if saved.is_empty() {
+        "没有文件被写入。".to_string()
+    } else if !wrote_new {
+        download_job::already_local_message(&saved)
+    } else if kind == "model" {
+        download_job::done_message(&saved)
+    } else {
+        let tail = notes
+            .iter()
+            .filter(|n| n.contains("已安装") || n.contains("找到"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("");
+        if tail.is_empty() {
+            download_job::done_message(&saved)
+        } else {
+            format!("已下载到 {}。{tail}", saved.join("、"))
+        }
+    };
+    if !notes.is_empty() && kind == "model" {
+        let extra = notes.join("");
+        message = format!("{extra}{message}");
+    }
+    emit_download(app, "done", &message, total_all, total_all);
+    Ok(message)
+}
+
+#[tauri::command]
+async fn start_download(
+    app: tauri::AppHandle,
+    files: Vec<DownloadPart>,
+    kind: String,
+    hf_token: Option<String>,
+    token_host: Option<String>,
+) -> Result<String, String> {
+    if files.is_empty() {
+        return Err("没有要下载的文件，这次没有开始。".to_string());
+    }
+    if files.len() > 40 {
+        return Err("一次最多下载 40 个文件。这次没有开始。".to_string());
+    }
+    {
+        let state = app.state::<AppState>();
+        let mut busy = state.download_busy.lock().unwrap();
+        if *busy {
+            return Err("已经有下载在进行。可以取消当前这一份，不会另起一份。".to_string());
+        }
+        *busy = true;
+        state.download_cancel.store(false, Ordering::SeqCst);
+    }
+    let app_job = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        perform_download(&app_job, &files, &kind, hf_token, token_host)
+    })
+    .await
+    .map_err(|err| format!("下载任务中断：{err}"));
+    {
+        let state = app.state::<AppState>();
+        *state.download_busy.lock().unwrap() = false;
+        state.download_cancel.store(false, Ordering::SeqCst);
+    }
+    outcome?
+}
+
+#[tauri::command]
+fn cancel_download(state: tauri::State<AppState>) -> String {
+    if !*state.download_busy.lock().unwrap() {
+        return "当前没有正在进行的下载。".to_string();
+    }
+    state.download_cancel.store(true, Ordering::SeqCst);
+    "正在取消，没下完的文件会删掉。".to_string()
 }
 
 // ---------- 聊天 ----------
@@ -1973,6 +2243,8 @@ fn main() {
             probe_stop: AtomicBool::new(false),
             probe_gen: AtomicU64::new(0),
             probe: Mutex::new(ProbeNote::default()),
+            download_busy: Mutex::new(false),
+            download_cancel: AtomicBool::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             get_hardware,
@@ -1981,6 +2253,8 @@ fn main() {
             list_hf_files,
             hf_repo_detail,
             download_file,
+            start_download,
+            cancel_download,
             import_engine_zip,
             list_local_models,
             import_model,

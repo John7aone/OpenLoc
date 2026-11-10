@@ -368,13 +368,18 @@ window.askDownload = async function(repo, btn) {
     setActionNote("网页预览不会下载。桌面版会到 Hugging Face 的 " + repo + " 查找 " + quant + " 量化文件，对上名字才开始拉，不会造一个假文件。");
     return;
   }
-  setActionNote("正在查询 " + repo + " …");
+  setActionNote("正在查询 " + repo + " 的文件体积…");
   try {
-    const files = await invoke("list_hf_files", { repo });
-    const hit = files.find((f) => f.toUpperCase().includes(quant.toUpperCase())) || files[0];
+    const prefs = downloadPrefs();
+    const detail = await invoke("hf_repo_detail", {
+      repo,
+      hfBase: OpenLocSettings.hfApiBase(prefs.hfMirror),
+      hfToken: prefs.hfToken,
+    });
+    const files = (detail && detail.files) || [];
+    const hit = files.find((f) => String(f.path || "").toUpperCase().includes(quant.toUpperCase())) || files[0];
     if (!hit) { setActionNote("仓库里没有找到 GGUF 文件，没有开始下载。"); return; }
-    await invoke("download_file", { url: "https://huggingface.co/" + repo + "/resolve/main/" + hit, filename: hit, kind: "model" });
-    setActionNote("已开始下载 " + hit + "。");
+    await runDownload(repo, hit.path, files, "model");
   } catch (e) { setActionNote("没有开始下载：" + e); }
 };
 function totalB(params) {
@@ -554,9 +559,10 @@ window.loadImgModels = function() {
 };
 window.downloadImgPack = function(name) {
   if (!hasTauri()) {
-    setActionNote("网页预览不会下载「" + name + "」的主体、文本编码器和 VAE。桌面版才会按所选量化到仓库拉取整套文件。");
+    setActionNote("网页预览不会下载「" + name + "」的主体、文本编码器和 VAE。桌面版才会按整套体积检查磁盘，空间不够不会开始。");
     return;
   }
+  setActionNote("「" + name + "」包含主体、文本编码器和 VAE。点开仓库里的权重后，下载会先按整套体积检查磁盘，不够就不会开始。");
   searchHfName(name);
 };
 window.searchHfName = async function(name) {
@@ -619,6 +625,8 @@ window.showFiles = async function(repo) {
     const detail = hasTauri()
       ? await invoke("hf_repo_detail", { repo, hfBase: OpenLocSettings.hfApiBase(prefs.hfMirror), hfToken: prefs.hfToken })
       : await OpenLocHf.detailPublic(repo);
+    window.__hfRawFiles = (detail && detail.files) || [];
+    window.__hfRepo = (detail && detail.repo) || repo;
     el.innerHTML = renderHfDetail(detail);
   } catch (e) { el.innerHTML = "<p class='search-empty'>没有查到文件：" + escHtml(e) + "</p>"; }
 };
@@ -633,23 +641,69 @@ function downloadPrefs() {
   } catch (e) {}
   return { hfMirror: mirror, githubPrefix: prefix, hfToken: token };
 }
-window.dlCat = async function(repo, f) {
+function paintDownload(ev) {
+  const dock = document.getElementById("dl-dock");
+  const text = document.getElementById("dl-dock-text");
+  const bar = document.getElementById("dl-dock-bar");
+  const cancel = document.getElementById("dl-cancel");
+  if (!dock || !text) return;
+  const message = ev && ev.message ? String(ev.message) : "";
+  const total = ev && Number(ev.total) > 0 ? Number(ev.total) : 0;
+  const received = ev && Number(ev.received) > 0 ? Number(ev.received) : 0;
+  const phase = ev && ev.phase ? String(ev.phase) : "";
+  dock.hidden = !message;
+  text.textContent = message;
+  if (bar) bar.style.width = total > 0 ? Math.min(100, Math.round(received / total * 100)) + "%" : "0";
+  if (cancel) cancel.hidden = phase === "done" || phase === "cancelled" || phase === "error" || phase === "refused";
+}
+async function runDownload(repo, chosenPath, rawFiles, kind) {
+  const plan = window.OpenLocDownload
+    ? OpenLocDownload.bundleFor(chosenPath, rawFiles)
+    : { error: "下载计划没有载入。", files: [] };
+  if (plan.error) {
+    paintDownload({ phase: "refused", message: plan.error, received: 0, total: 0 });
+    setActionNote(plan.error);
+    return;
+  }
   if (!hasTauri()) {
-    setActionNote("网页预览不会下载「" + f + "」。桌面版会从 Hugging Face 拉取这个文件。");
+    const names = plan.files.map((f) => f.path).join("、");
+    const note = "网页预览不会下载「" + names + "」。桌面版会先按整套体积检查磁盘，不够就不会开始，下载中能看到真实进度并可以取消。";
+    paintDownload({ phase: "refused", message: note, received: 0, total: 0 });
+    setActionNote(note);
     return;
   }
   const prefs = downloadPrefs();
-  const url = OpenLocSettings.prepareDownloadUrl("https://huggingface.co/" + repo + "/resolve/main/" + f, prefs);
+  const files = plan.files.map((f) => ({
+    url: OpenLocSettings.prepareDownloadUrl("https://huggingface.co/" + repo + "/resolve/main/" + f.path, prefs),
+    filename: f.path,
+    bytes: Number(f.size_bytes || f.bytes || 0),
+  }));
+  paintDownload({ phase: "progress", message: "正在检查目标盘空间…", received: 0, total: plan.totalBytes || 0 });
   try {
-    await invoke("download_file", {
-      url: url,
-      filename: f,
-      kind: "model",
+    const message = await invoke("start_download", {
+      files: files,
+      kind: kind,
       hfToken: prefs.hfToken,
       tokenHost: OpenLocSettings.tokenHost(prefs.hfMirror),
     });
-    alert("已开始下载 " + f);
-  } catch (e) { setActionNote("没有开始下载：" + e); }
+    paintDownload({ phase: "done", message: message, received: plan.totalBytes || 0, total: plan.totalBytes || 0 });
+    setActionNote(message);
+    loadModels();
+    loadInstalled();
+  } catch (e) {
+    const message = "没有下完：" + e;
+    paintDownload({ phase: "error", message: message, received: 0, total: 0 });
+    setActionNote(message);
+  }
+}
+window.dlCat = async function(repo, f) {
+  if (!hasTauri()) {
+    setActionNote("网页预览不会下载「" + f + "」。桌面版会先检查整套文件的磁盘空间，不够就不会开始。");
+    return;
+  }
+  const raw = (window.__hfRawFiles || []).filter((file) => file && file.path);
+  const siblings = raw.length ? raw : [{ path: f, size_bytes: 0 }];
+  await runDownload(repo, f, siblings, "model");
 };
 window.dl = async function(kind, url, filename) {
   const els = [document.getElementById("dlmsg"), document.getElementById("run-dlmsg"), document.getElementById("engine-msg")].filter(Boolean);
@@ -657,17 +711,34 @@ window.dl = async function(kind, url, filename) {
   if (!hasTauri()) { say("网页预览不会下载。桌面版才会从公开地址拉取，没有付费加速。"); return; }
   const prefs = downloadPrefs();
   const prepared = OpenLocSettings.prepareDownloadUrl(url, prefs);
+  paintDownload({ phase: "progress", message: "正在检查目标盘空间…", received: 0, total: 0 });
   try {
-    say(await invoke("download_file", {
-      url: prepared,
-      filename: filename,
+    const message = await invoke("start_download", {
+      files: [{ url: prepared, filename: filename, bytes: 0 }],
       kind: kind,
       hfToken: prefs.hfToken,
       tokenHost: OpenLocSettings.tokenHost(prefs.hfMirror),
-    }));
+    });
+    say(message);
+    paintDownload({ phase: "done", message: message, received: 1, total: 1 });
     loadEngineStatus();
   }
-  catch (e) { say("没有开始下载：" + e); }
+  catch (e) {
+    say("没有下完：" + e);
+    paintDownload({ phase: "error", message: "没有下完：" + e, received: 0, total: 0 });
+  }
+};
+window.cancelDownload = async function() {
+  if (!hasTauri()) {
+    paintDownload({ phase: "cancelled", message: "网页预览没有正在进行的下载。", received: 0, total: 0 });
+    return;
+  }
+  try {
+    const message = await invoke("cancel_download");
+    paintDownload({ phase: "progress", message: message, received: 0, total: 0 });
+  } catch (e) {
+    paintDownload({ phase: "error", message: "没能取消：" + e, received: 0, total: 0 });
+  }
 };
 window.dlLlama = function() { return dl("engine", OpenLocSettings.LLAMA_ENGINE_URL, "llama.zip"); };
 window.dlSd = function() { return dl("engine", OpenLocSettings.SD_ENGINE_URL, "sd.zip"); };
@@ -1578,6 +1649,10 @@ window.saveSettings = async function() {
       listen("openloc-probe", function(ev) {
         const payload = ev && ev.payload ? ev.payload : ev;
         paintProbe(payload);
+      });
+      listen("openloc-download", function(ev) {
+        const payload = ev && ev.payload ? ev.payload : ev;
+        paintDownload(payload);
       });
     }
   };

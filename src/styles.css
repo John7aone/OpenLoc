@@ -626,7 +626,12 @@ html[data-theme="light"] button.theme-toggle .icon-moon { display: block; }
 
 /* PR #3 页面结构，颜色只用上面的蓝强调，不用青绿。 */
 .preview-banner{background:color-mix(in srgb, var(--accent) 12%, var(--bg-elev));color:var(--text);border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));border-radius:var(--radius);padding:8px 10px;margin-bottom:8px;font-size:var(--fs-3)}
-#action-note{margin:0 0 12px}
+#action-note{margin:0 0 8px}
+.dl-dock{display:flex;align-items:center;gap:10px;margin:0 0 8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-elev);box-shadow:var(--shadow)}
+.dl-dock[hidden]{display:none}
+.dl-dock p{margin:0;flex:1.4;min-width:0}
+.dl-dock .bar{flex:1;min-width:72px;margin:0}
+.dl-dock button{margin:0;flex-shrink:0}
 #action-note[hidden],#agent-note[hidden],.attach-strip[hidden],.chat-empty[hidden]{display:none}
 .step-copy small{display:block;white-space:normal}
 .hero h2{margin:0 0 6px;font-size:20px;line-height:1.3}
