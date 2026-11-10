@@ -5,7 +5,7 @@
   }
 
   function attachmentNote(names) {
-    return "（本机附件：" + names + "。只留在这条对话里，没有上传；本地纯文本模型看不到图片和文件内容。）";
+    return "（本机附件：" + names + "。只留在这条对话里，没有上传。这一版还不能识图，纯文本模型看不到图片和文件内容。）";
   }
 
   function notRunningReply() {
@@ -29,7 +29,7 @@
       };
     }
     const modelText = names.length
-      ? raw + "\n（用户在本机附了文件，当前接口只接收文字，你看不到文件内容：" + names.join("、") + "）"
+      ? raw + "\n（用户在本机附了文件。这一版还不能识图，当前接口只接收文字，你看不到文件内容：" + names.join("、") + "）"
       : raw;
     if (!hasTauri) {
       const preview = "网页预览没有本地模型。请在桌面版的「运行」页启动后再发。这次没有生成回复。";
@@ -39,6 +39,15 @@
       return { kind: "preview", shown: shown, modelText: modelText, reply: reply, search: false };
     }
     if (webOn) {
+      if (input && input.searchPlugin === false) {
+        return {
+          kind: "check-service",
+          shown: shown,
+          modelText: modelText,
+          search: false,
+          note: "网络搜索插件没有启用。到对话的「工具」里安装并打开后再查。这次没有访问网络，也不会编造搜索结果。",
+        };
+      }
       return { kind: "search", shown: shown, modelText: modelText, query: raw, search: true };
     }
     return { kind: "check-service", shown: shown, modelText: modelText, search: false };

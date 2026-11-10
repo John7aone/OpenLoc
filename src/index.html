@@ -28,6 +28,11 @@
 <main class="main">
 <div id="preview-banner" class="preview-banner">网页预览：可以看各页布局。硬件数字、下载和启动引擎不会在浏览器里真的执行。桌面版 OpenLoc 才会做这些事。</div>
 <div id="action-note" class="composer-note" hidden></div>
+<div id="dl-dock" class="dl-dock" hidden>
+<p id="dl-dock-text">正在准备下载…</p>
+<div class="bar"><div id="dl-dock-bar" class="fill" style="width:0"></div></div>
+<button class="sec" type="button" id="dl-cancel" onclick="cancelDownload()">取消下载</button>
+</div>
 <div class="steps">
 <div class="step" id="step-hw"><span class="num" id="step-hw-num">1</span><div class="step-copy"><b>看本机硬件</b><small id="step-hw-sub">正在检测…</small></div><span class="status" id="step-hw-status">检测中</span></div>
 <div class="step" id="step-engine"><span class="num">2</span><div class="step-copy"><b>装 / 启引擎</b><small id="step-engine-sub">安装和启动在运行页</small></div><button type="button" class="sec" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行</button></div>
@@ -80,7 +85,7 @@
 </div>
 <div id="cat-rec">
 <div class="pills" id="catpills">
-<button class="on" type="button" onclick="setFilter('fit',this)">适合我的电脑</button><button type="button" onclick="setFilter('all',this)">全部</button><button type="button" onclick="setFilter('对话',this)">对话</button><button type="button" onclick="setFilter('编程',this)">编程</button><button type="button" onclick="setFilter('看图',this)">看图</button><button type="button" onclick="setFilter('推理',this)">推理</button>
+<button class="on" type="button" onclick="setFilter('fit',this)">适合我的电脑</button><button type="button" onclick="setFilter('all',this)">全部</button><button type="button" onclick="setFilter('对话',this)">对话</button><button type="button" onclick="setFilter('编程',this)">编程</button><button type="button" onclick="setFilter('看图',this)">看图（这一版还不能识图）</button><button type="button" onclick="setFilter('推理',this)">推理</button>
 </div>
 <p class="muted small" id="fit-note" hidden></p>
 <div id="catalog"></div><div id="catfiles"></div>
@@ -90,7 +95,7 @@
 <div id="installed"><p class="muted">还没有读取本机已安装模型。</p></div>
 <div class="dashed">
 <b>已经有模型文件？</b>
-<p class="muted">选择 .gguf / .safetensors / .ckpt 导入到 data/models。分卷文件选第一卷即可；同目录的 mmproj 会当作看图组件。浏览器往往只给文件名、不给完整路径，那种情况不会假装已经导入。</p>
+<p class="muted">选择 .gguf / .safetensors / .ckpt 导入到当前模型目录。分卷文件选第一卷即可。同目录的 mmproj 这一版还不能识图，不会被当成已经能看图。浏览器往往只给文件名、不给完整路径，那种情况不会假装已经导入。</p>
 <div class="row"><button class="sec" type="button" onclick="document.getElementById('importfile').click()">选择文件</button><button type="button" onclick="importModel()">按路径导入</button></div>
 <label>模型完整路径 <input id="importpath" placeholder="例如 C:\Models\qwen.gguf"></label>
 <div id="importmsg" class="muted"></div>
@@ -163,16 +168,22 @@
 <button class="sec" id="stopBtn" type="button" onclick="stopRunModel()" style="display:none">停止模型</button>
 <button class="sec" id="chatBtn" type="button" onclick="tab('chat', document.querySelector('#nav [data-page=chat]'))" style="display:none">开始对话</button>
 <div id="runmsg" class="muted"></div>
+<p id="probe-run" class="probe-note" role="status" hidden></p>
 </div>
 </div>
 <div class="card" id="runcard" style="display:none"><b id="run-title">运行中</b><p class="muted" id="run-sub">实际按空闲显存自动分配</p>
 <div class="row" style="justify-content:space-between"><div><div class="muted small">生成速度</div><b id="run-speed">—</b></div><div><div class="muted small">显存</div><b id="run-vram"></b></div><div><div class="muted small">内存</div><b id="run-mem"></b></div><div><code id="run-api"></code><button class="sec" type="button" onclick="copyApi()">复制</button></div></div>
+<div id="api-help" class="api-help">
+<p>本机接口是上面的地址，形如 <code>http://127.0.0.1:端口/v1</code>。这一版只绑定 127.0.0.1，不向局域网开放。</p>
+<p>接到 Cursor、Continue 或 OpenCode：把 Base URL 填成这个地址，模型名填 <code>local</code>，不需要云端密钥。可以用 <code>curl http://127.0.0.1:端口/v1/models</code> 看服务是否在听。</p>
+<p id="offload-note" class="muted small"></p>
+</div>
 </div>
 </div>
 
 <div id="chat" class="tab card">
 <div class="chatwrap">
-<div class="chatlist"><button type="button" onclick="newChat()">+ 新对话</button><div class="mcard" id="chat-history"><b>你好</b><div class="muted small">当前对话</div></div></div>
+<div class="chatlist"><button type="button" onclick="newChat()">+ 新对话</button><div id="chat-history"><p class="muted small">还没有对话</p></div></div>
 <div class="chatmain">
 <div class="chat-head">
 <div class="model-pill">
@@ -188,6 +199,7 @@
 </div>
 </div>
 <div id="chat-service-line" class="muted small">正在确认本机聊天服务…</div>
+<p id="probe-chat" class="probe-note" role="status" hidden></p>
 <div id="chatbox" class="chatbox">
 <div id="chat-empty" class="chat-empty">
 <b>有什么可以帮你？</b>
@@ -199,12 +211,12 @@
 <div class="composer">
 <div id="chat-attach" class="attach-strip" hidden></div>
 <textarea id="chatin" rows="3" placeholder="问点什么，或者说「画一只…」（Enter 发送，Shift+Enter 换行）"></textarea>
-<div class="composer-hint">先在「运行」页启动一个模型。健康检查没通过时，这里不会假装已经连上。图片和附件不会被纯文本模型识别。画图、做视频不用启动聊天服务。</div>
+<div class="composer-hint">先在「运行」页启动一个模型。健康检查没通过时，这里不会假装已经连上。这一版还不能识图，图片和附件不会被模型识别。画图、做视频不用启动聊天服务。</div>
 <div class="composer-bar">
 <div class="composer-tools">
 <button type="button" class="toolbtn" onclick="pickAttach()" title="添加附件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5l6.2-6.2a3 3 0 014.2 4.2l-7.4 7.4a4.5 4.5 0 01-6.4-6.4l6.8-6.8"/></svg>附件</button>
 <button type="button" class="toolbtn" id="shotBtn" onclick="captureForChat()" title="框选一块区域，确认后加入当前对话。取消则不贴图。网页预览不能真的截图。"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4H4v3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1.2"/></svg>截图</button>
-<button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
+<button type="button" class="toolbtn" onclick="toggleTools()" title="工具"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4L15 12l-3-3 2.7-2.7z"/></svg>工具</button>
 <button type="button" class="toolbtn" onclick="tab('agent', document.querySelector('#nav [data-page=agent]'))" title="操作电脑"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>操作电脑</button>
 <button type="button" class="toolbtn" onclick="tab('img', document.querySelector('#nav [data-page=img]'))" title="画图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l5-4 3 3 3-2 3 3"/></svg>画图</button>
 <button type="button" class="toolbtn" onclick="tab('vid', document.querySelector('#nav [data-page=vid]'))" title="视频"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M10 9.2l5 2.8-5 2.8z"/></svg>视频</button>
@@ -212,12 +224,24 @@
 </div>
 <button type="button" class="sendbtn" id="sendBtn" onclick="onSendClick()" title="发送" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></svg></button>
 </div>
+<div id="tool-panel" class="tool-panel" hidden>
+<p class="muted small">插件装在本机。点安装之前，卡片上写明它会访问网络，还是只读你选中的文件。从 GitHub 安装时只收下清单，不执行仓库里的脚本。</p>
+<div id="plugin-list"></div>
+<label>公开仓库 <input id="plugin-repo" placeholder="owner/repo 或 https://github.com/owner/repo" autocomplete="off"></label>
+<div class="row">
+<button type="button" class="sec" onclick="previewPluginRepo()">查看权限</button>
+<button type="button" id="plugin-confirm" onclick="confirmPluginRepo()" hidden>确认安装</button>
+<button type="button" class="sec" onclick="pickReadFolder()">选择要读的文件夹</button>
+</div>
+<p id="plugin-preview" class="muted small"></p>
+<p id="read-scope" class="muted small">还没有选择文件夹。附件里带完整路径的文件也会交给读文件插件。不会扫描整盘。</p>
+</div>
 <div id="composer-note" class="composer-note" role="status" aria-live="polite" hidden></div>
 <div class="composer-foot">
 <label class="ctx-line">上下文 <select id="ctx"><option value="4096">4K</option><option value="8192">8K</option><option value="16384" selected>16K</option><option value="32768">32K</option></select></label>
 </div>
 </div>
-<input id="chatfile" type="file" multiple accept="image/*,.txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.gif">
+<input id="chatfile" type="file" multiple accept="image/*,.txt,.md,.pdf,.docx,.json,.csv,.html,.png,.jpg,.jpeg,.webp,.gif">
 </div>
 </div>
 </div>
@@ -279,7 +303,10 @@
 <label>模型 <select id="imgmodel"></select></label>
 <label>提示词 <textarea id="imgprompt" rows="3" placeholder="例如：a cat sitting by the window, soft light"></textarea></label>
 <label>步数 <input id="imgsteps" type="number" value="20"></label>
-<button type="button" onclick="genImg()">生成图片</button><div id="imgmsg" class="muted"></div></div>
+<label>尺寸 <select id="imgsize"><option value="512">512</option><option value="768">768</option></select></label>
+<div class="row"><button type="button" id="img-go" onclick="genImg()">生成图片</button><button type="button" class="sec" id="img-stop" onclick="stopMedia()" hidden>停止</button></div>
+<div id="imgmsg" class="muted"></div>
+<div id="img-preview"></div></div>
 
 <div id="vid" class="tab card"><h2>视频</h2>
 <div id="vid-empty" class="empty">
@@ -287,12 +314,15 @@
 <div class="row"><button type="button" onclick="tab('md', document.querySelector('#nav [data-page=md]'))">去运行页装引擎</button><button type="button" class="sec" onclick="tab('cat', document.querySelector('#nav [data-page=cat]')); catTab('img', document.getElementById('sub-img'))">去模型页下载</button></div>
 </div>
 <p><b>方式一：动效视频（ffmpeg）</b>——把一张图做成推近动效，这是动效，不是扩散生成，CPU 就能跑。</p>
-<label>图片完整路径 <input id="vidimg" placeholder="例如 C:\...\outputs\img_xxx.png"></label>
-<button type="button" onclick="genMotion()">生成动效视频</button>
+<p class="muted small" id="vid-ffmpeg">正在确认本机有没有 ffmpeg…</p>
+<label>图片完整路径 <input id="vidimg" placeholder="例如作品目录里的 img_xxx.png"></label>
+<div class="row"><button type="button" onclick="genMotion()">生成动效视频</button><button type="button" class="sec" onclick="stopMedia()">停止</button></div>
 <p><b>方式二：扩散视频（Wan）</b>——调用 sd-cli 的 vid_gen，需要 Wan 视频模型和足够显存，没有会直接报错，不会给你假视频。</p>
 <label>视频模型 <select id="vidmodel"></select></label>
 <label>提示词 <textarea id="vidprompt" rows="2"></textarea></label>
-<button type="button" onclick="genVid()">生成扩散视频</button><div id="vidmsg" class="muted"></div></div>
+<div class="row"><button type="button" onclick="genVid()">生成扩散视频</button><button type="button" class="sec" onclick="stopMedia()">停止</button></div>
+<div id="vidmsg" class="muted"></div>
+<div id="vid-preview"></div></div>
 
 <div id="settings" class="tab">
 <h2>设置</h2>
@@ -304,7 +334,7 @@
 <input id="modeldir" value="data/models" readonly>
 <button class="sec" type="button" onclick="chooseModelDir()">选择…</button>
 </div>
-<p class="set-hint muted small" id="modeldir-msg">桌面版用程序旁边的 data/models。改到别的盘还没接上，已经下载的文件也不会搬家。选择只会打开当前目录。</p>
+<p class="set-hint muted small" id="modeldir-msg">默认在程序旁边的 data/models。改到别的文件夹后，新的下载写到那里。原来的文件还在旧位置，这一版不会自动搬家。</p>
 </div>
 <div class="set-field">
 <b>作品保存位置（画图 / 视频）</b>
@@ -312,7 +342,7 @@
 <input id="outputdir" value="data/outputs" readonly>
 <button class="sec" type="button" onclick="chooseOutputDir()">选择…</button>
 </div>
-<p class="set-hint muted small" id="outputdir-msg">画图和视频默认写到 data/outputs。换成别的文件夹还没接上。选择只会打开当前目录。</p>
+<p class="set-hint muted small" id="outputdir-msg">画图和视频默认写到 data/outputs。改到别的文件夹后，新的作品写到那里。原来的文件还在旧位置，这一版不会自动搬家。</p>
 </div>
 </div>
 <div class="setcard">
@@ -419,6 +449,11 @@
 <div id="bglist"><p class="muted">点刷新，看 OpenLoc 现在在后台跑着哪些程序。网页预览没有这些进程。</p></div>
 </div>
 <div class="setcard">
+<h3>插件</h3>
+<p class="muted small">安装、启用和卸载都在这里，也在对话的「工具」里。不会新增侧栏。从 GitHub 来的插件只认清单，不执行脚本。</p>
+<div id="settings-plugin-list"></div>
+</div>
+<div class="setcard">
 <div class="setcard-head">
 <h3>第三方 API</h3>
 <button type="button" onclick="openApiForm()">添加 API</button>
@@ -451,7 +486,11 @@
 <script src="recommend.js"></script>
 <script src="hf-search.js"></script>
 <script src="chat-flow.js"></script>
+<script src="sessions.js"></script>
+<script src="speed-note.js"></script>
+<script src="plugins.js"></script>
 <script src="settings-prefs.js"></script>
+<script src="download-plan.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

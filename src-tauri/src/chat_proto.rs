@@ -24,6 +24,7 @@ pub struct SseParser {
     buf: String,
     raw: String,
     deltas: usize,
+    pub usage_tokens: Option<u32>,
 }
 
 impl SseParser {
@@ -65,6 +66,11 @@ impl SseParser {
             }
             if let Some(text) = delta_text(&v, &["reasoning_content", "reasoning"]) {
                 out.push(SsePiece::Reasoning(text));
+            }
+            if let Some(n) = v.pointer("/usage/completion_tokens").and_then(|x| x.as_u64()) {
+                if n > 0 && n <= u32::MAX as u64 {
+                    self.usage_tokens = Some(n as u32);
+                }
             }
         }
         out
@@ -175,6 +181,8 @@ pub fn chat_body(messages: &[ChatTurn], think: bool, stream: bool) -> Value {
         // 必须显式传 true/false。不传时 b12110 的 --reasoning auto 会按模板自己打开思考，
         // Qwen3.5 会停在未闭合的思考段里，把同一句问候改写很多遍，正文一直出不来。
         "chat_template_kwargs": {"enable_thinking": think},
+        // 流结束时带回 completion_tokens。引擎不认识这个字段会 400，再走不含它的退路。
+        "stream_options": {"include_usage": true},
     });
     if think {
         body["reasoning_budget_tokens"] = serde_json::json!(DEFAULT_REASONING_BUDGET);
@@ -204,7 +212,7 @@ pub fn chat_url(port: u16) -> String {
     format!("http://{LOOPBACK_HOST}:{port}/v1/chat/completions")
 }
 
-pub fn launch_args(model: &std::path::Path, port: u16, ctx: u32) -> Vec<String> {
+pub fn launch_args(model: &std::path::Path, port: u16, ctx: u32, gpu_layers: u32) -> Vec<String> {
     vec![
         "-m".to_string(),
         model.display().to_string(),
@@ -217,6 +225,8 @@ pub fn launch_args(model: &std::path::Path, port: u16, ctx: u32) -> Vec<String> 
         // 用 GGUF 里自带的 jinja chat template，结束标记跟着模型走。
         // 不传 --chat-template，避免用一套通用模板盖掉模型自己的。
         "--jinja".to_string(),
+        "-ngl".to_string(),
+        gpu_layers.to_string(),
     ]
 }
 
@@ -381,6 +391,7 @@ fn post_blocking(
 
 pub struct StreamOutcome {
     pub cancelled: bool,
+    pub completion_tokens: Option<u32>,
 }
 
 pub async fn open_and_read_stream(
@@ -455,7 +466,10 @@ pub async fn open_and_read_stream(
             on_piece(piece);
         }
     }
-    Ok(StreamOutcome { cancelled })
+    Ok(StreamOutcome {
+        cancelled,
+        completion_tokens: parser.usage_tokens,
+    })
 }
 
 async fn post_async(
@@ -472,6 +486,247 @@ async fn post_async(
         .map_err(|e| map_transport_error(&e, port))
 }
 
+/// 启动后的试答。很短，并且关掉思考。不写入用户的对话记录。
+pub const WARMUP_TEXT: &str = "你好";
+pub const WARMUP_MAX_TOKENS: u32 = 16;
+pub const WARMUP_TIMEOUT: Duration = Duration::from_secs(45);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarmupPhase {
+    Ok,
+    Empty,
+    Repeat,
+    Timeout,
+    Failed,
+    Yielded,
+}
+
+impl WarmupPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Empty => "empty",
+            Self::Repeat => "repeat",
+            Self::Timeout => "timeout",
+            Self::Failed => "failed",
+            Self::Yielded => "yielded",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WarmupReport {
+    pub phase: WarmupPhase,
+    pub message: String,
+    pub seconds: f64,
+}
+
+pub fn warmup_running_message() -> String {
+    "正在后台试答「你好」（字数很少，已关闭思考）。这不影响你直接对话，也不会写入对话记录。".to_string()
+}
+
+pub fn warmup_body() -> Value {
+    serde_json::json!({
+        "model": "local",
+        "messages": [{"role": "user", "content": WARMUP_TEXT}],
+        "temperature": 0.7,
+        "stream": false,
+        "max_tokens": WARMUP_MAX_TOKENS,
+        "repeat_penalty": DEFAULT_REPEAT_PENALTY,
+        "repeat_last_n": DEFAULT_REPEAT_LAST_N,
+        "chat_template_kwargs": {"enable_thinking": false},
+    })
+}
+
+/// 引擎拒绝思考或防复读字段时仍保留很短的长度上限，避免试答自己说个没完。
+fn warmup_body_plain() -> Value {
+    serde_json::json!({
+        "model": "local",
+        "messages": [{"role": "user", "content": WARMUP_TEXT}],
+        "temperature": 0.7,
+        "stream": false,
+        "max_tokens": WARMUP_MAX_TOKENS,
+    })
+}
+
+pub fn reply_is_repetitive(text: &str) -> bool {
+    let compact: String = text.split_whitespace().collect::<Vec<_>>().join("");
+    let chars: Vec<char> = compact.chars().collect();
+    if chars.len() < 6 {
+        return false;
+    }
+    let max_unit = chars.len() / 3;
+    for unit in 2..=max_unit {
+        if chars.len() % unit != 0 {
+            continue;
+        }
+        let times = chars.len() / unit;
+        if times < 3 {
+            continue;
+        }
+        let piece = &chars[..unit];
+        if chars.chunks(unit).all(|chunk| chunk == piece) {
+            return true;
+        }
+    }
+    let window = 8.min(chars.len() / 3);
+    if window >= 4 {
+        let mut i = 0;
+        while i + window <= chars.len() {
+            let needle: String = chars[i..i + window].iter().collect();
+            if compact.matches(needle.as_str()).count() >= 3 {
+                return true;
+            }
+            i += window;
+        }
+    }
+    false
+}
+
+pub fn judge_warmup_text(text: &str) -> WarmupPhase {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        WarmupPhase::Empty
+    } else if reply_is_repetitive(trimmed) {
+        WarmupPhase::Repeat
+    } else {
+        WarmupPhase::Ok
+    }
+}
+
+pub fn warmup_message(phase: WarmupPhase, seconds: f64, detail: &str) -> String {
+    match phase {
+        WarmupPhase::Ok => format!(
+            "试答正常，用时 {:.1} 秒。这条试答没有写入对话，你可以直接聊天。",
+            seconds
+        ),
+        WarmupPhase::Empty => {
+            "试答没有正文。模板可能不匹配，建议换模型，或在运行页关闭思考后再启动。你仍可以直接对话。"
+                .to_string()
+        }
+        WarmupPhase::Repeat => {
+            "试答出现复读，没有正常结束。模板可能不匹配，建议换模型，或关闭思考后再启动。你仍可以直接对话。"
+                .to_string()
+        }
+        WarmupPhase::Timeout => {
+            "试答超时，没有在时限内结束。模板可能不匹配，建议换模型，或关闭思考后再启动。你仍可以直接对话。"
+                .to_string()
+        }
+        WarmupPhase::Failed => format!(
+            "试答没有完成：{}。建议换模型或关闭思考后再启动。你仍可以直接对话。",
+            clamp(detail, 160)
+        ),
+        WarmupPhase::Yielded => "试答已停下，把服务让给这次对话。没有写入对话记录。".to_string(),
+    }
+}
+
+fn warmup_report(phase: WarmupPhase, started: std::time::Instant, detail: &str) -> WarmupReport {
+    let seconds = started.elapsed().as_secs_f64();
+    WarmupReport {
+        message: warmup_message(phase, seconds, detail),
+        phase,
+        seconds,
+    }
+}
+
+enum WarmupStop {
+    Yielded,
+    Timeout,
+    Failed(String),
+}
+
+async fn post_until_stop(
+    client: &reqwest::Client,
+    port: u16,
+    body: &Value,
+    stop: &mut impl FnMut() -> bool,
+) -> Result<reqwest::Response, WarmupStop> {
+    let pending = client
+        .post(chat_url(port))
+        .header("User-Agent", "OpenLoc")
+        .json(body)
+        .send();
+    tokio::pin!(pending);
+    loop {
+        if stop() {
+            return Err(WarmupStop::Yielded);
+        }
+        tokio::select! {
+            biased;
+            _ = tokio::time::sleep(Duration::from_millis(80)) => {}
+            result = &mut pending => {
+                return match result {
+                    Ok(resp) => Ok(resp),
+                    Err(err) if err.is_timeout() => Err(WarmupStop::Timeout),
+                    Err(err) => Err(WarmupStop::Failed(err.to_string())),
+                };
+            }
+        }
+    }
+}
+
+fn stop_report(stop: WarmupStop, started: std::time::Instant) -> WarmupReport {
+    match stop {
+        WarmupStop::Yielded => warmup_report(WarmupPhase::Yielded, started, ""),
+        WarmupStop::Timeout => warmup_report(WarmupPhase::Timeout, started, ""),
+        WarmupStop::Failed(detail) => warmup_report(WarmupPhase::Failed, started, &detail),
+    }
+}
+
+/// 健康检查通过后调用。`stop` 返回 true 时立刻丢掉请求，不把试答当成失败。
+pub async fn run_warmup(
+    port: u16,
+    timeout: Duration,
+    mut stop: impl FnMut() -> bool,
+) -> WarmupReport {
+    let started = std::time::Instant::now();
+    if stop() {
+        return warmup_report(WarmupPhase::Yielded, started, "");
+    }
+    let client = match reqwest::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => return warmup_report(WarmupPhase::Failed, started, &err.to_string()),
+    };
+    let first = match post_until_stop(&client, port, &warmup_body(), &mut stop).await {
+        Ok(resp) => resp,
+        Err(stop) => return stop_report(stop, started),
+    };
+    let resp = if first.status().as_u16() == 400 {
+        let _ = first.text().await.unwrap_or_default();
+        if stop() {
+            return warmup_report(WarmupPhase::Yielded, started, "");
+        }
+        match post_until_stop(&client, port, &warmup_body_plain(), &mut stop).await {
+            Ok(resp) => resp,
+            Err(stop) => return stop_report(stop, started),
+        }
+    } else {
+        first
+    };
+    if stop() {
+        return warmup_report(WarmupPhase::Yielded, started, "");
+    }
+    let code = resp.status().as_u16();
+    let body = match resp.text().await {
+        Ok(body) => body,
+        Err(err) if err.is_timeout() => return warmup_report(WarmupPhase::Timeout, started, ""),
+        Err(err) => return warmup_report(WarmupPhase::Failed, started, &err.to_string()),
+    };
+    if !(200..300).contains(&code) {
+        let detail = json_api_error(&body).unwrap_or_else(|| clamp(&body, 160));
+        return warmup_report(WarmupPhase::Failed, started, &detail);
+    }
+    if let Some(message) = json_api_error(&body) {
+        return warmup_report(WarmupPhase::Failed, started, &message);
+    }
+    let text = extract_completion(&serde_json::from_str(&body).unwrap_or(Value::Null));
+    warmup_report(judge_warmup_text(&text), started, "")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,8 +738,9 @@ mod tests {
 
     #[test]
     fn launch_and_urls_stay_on_loopback() {
-        let args = launch_args(std::path::Path::new("demo.gguf"), 18080, 4096);
+        let args = launch_args(std::path::Path::new("demo.gguf"), 18080, 4096, 12);
         assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
+        assert!(args.windows(2).any(|w| w == ["-ngl", "12"]));
         assert!(args.iter().any(|a| a == "--jinja"));
         assert!(!args.iter().any(|a| a == "--no-jinja" || a == "--chat-template" || a == "0.0.0.0" || a == "localhost"));
         assert!(health_url(8080).starts_with("http://127.0.0.1:8080/"));
@@ -539,6 +795,9 @@ mod tests {
                 SsePiece::Done,
             ]
         );
+        let mut usage = SseParser::default();
+        usage.push("data: {\"usage\":{\"completion_tokens\":12},\"choices\":[{\"delta\":{}}]}\n\n");
+        assert_eq!(usage.usage_tokens, Some(12));
     }
 
     #[test]
@@ -933,5 +1192,86 @@ mod tests {
             closed.load(AtomicOrdering::SeqCst),
             "停止后连接还在，服务端仍能继续把生成内容写出去"
         );
+    }
+
+    #[test]
+    fn warmup_request_is_short_and_thinking_off() {
+        let body = warmup_body();
+        assert_eq!(body["messages"][0]["content"], WARMUP_TEXT);
+        assert_eq!(body["max_tokens"], WARMUP_MAX_TOKENS);
+        assert!(WARMUP_MAX_TOKENS <= 32);
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(body.get("reasoning_budget_tokens").is_none());
+        let plain = warmup_body_plain();
+        assert_eq!(plain["max_tokens"], WARMUP_MAX_TOKENS);
+        assert!(plain.get("chat_template_kwargs").is_none());
+        let running = warmup_running_message();
+        assert!(running.contains("不影响"));
+        assert!(running.contains("不会写入对话"));
+    }
+
+    #[test]
+    fn warmup_judge_flags_empty_and_repetition_only() {
+        assert_eq!(judge_warmup_text(""), WarmupPhase::Empty);
+        assert_eq!(judge_warmup_text("   "), WarmupPhase::Empty);
+        assert_eq!(judge_warmup_text("你好，我在。"), WarmupPhase::Ok);
+        assert_eq!(judge_warmup_text("你好"), WarmupPhase::Ok);
+        assert!(reply_is_repetitive("你好你好你好"));
+        assert!(reply_is_repetitive("abcabcabc"));
+        assert_eq!(judge_warmup_text("你好你好你好你好"), WarmupPhase::Repeat);
+        assert!(!reply_is_repetitive("你好，今天天气不错。"));
+        for phase in [WarmupPhase::Empty, WarmupPhase::Repeat, WarmupPhase::Timeout] {
+            let text = warmup_message(phase, 1.2, "");
+            assert!(text.contains("模板可能不匹配"), "{text}");
+            assert!(text.contains("换模型"), "{text}");
+            assert!(text.contains("思考"), "{text}");
+            assert!(text.contains("可以直接对话") || text.contains("仍可以直接对话"), "{text}");
+        }
+        let ok = warmup_message(WarmupPhase::Ok, 1.2, "");
+        assert!(ok.contains("试答正常"));
+        assert!(ok.contains("没有写入对话"));
+        assert!(!ok.contains("模板可能不匹配"));
+    }
+
+    #[tokio::test]
+    async fn warmup_reads_a_short_reply_and_can_yield() {
+        let port = serve(vec![(
+            200,
+            r#"{"choices":[{"message":{"content":"你好，我在。"}}]}"#,
+        )]);
+        let report = run_warmup(port, Duration::from_secs(3), || false).await;
+        assert_eq!(report.phase, WarmupPhase::Ok, "{}", report.message);
+        assert!(report.message.contains("试答正常"));
+
+        let port = serve(vec![(200, r#"{"choices":[{"message":{"content":""}}]}"#)]);
+        let empty = run_warmup(port, Duration::from_secs(3), || false).await;
+        assert_eq!(empty.phase, WarmupPhase::Empty);
+
+        let port = serve(vec![(
+            200,
+            r#"{"choices":[{"message":{"content":"你好你好你好你好"}}]}"#,
+        )]);
+        let repeated = run_warmup(port, Duration::from_secs(3), || false).await;
+        assert_eq!(repeated.phase, WarmupPhase::Repeat);
+
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let _hold = listener.accept();
+            thread::sleep(Duration::from_secs(3));
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            flag.store(true, AtomicOrdering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let yielded = run_warmup(port, Duration::from_secs(8), || stop.load(AtomicOrdering::SeqCst)).await;
+        assert_eq!(yielded.phase, WarmupPhase::Yielded, "{}", yielded.message);
+        assert!(started.elapsed() < Duration::from_secs(3), "让路没有及时停掉试答");
+        assert!(yielded.message.contains("没有写入对话"));
     }
 }
