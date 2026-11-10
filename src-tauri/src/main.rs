@@ -797,6 +797,63 @@ fn stop_our_llama(our_pid: Option<u32>) -> usize {
     n
 }
 
+/// 画图、动效、sd-cli 这些是本进程拉起来的子进程。退出时按父进程收掉，不扫别人的 ffmpeg。
+fn stop_direct_child_tools() {
+    let self_pid = std::process::id();
+    let names = ["llama-server", "llama-server.exe", "sd-server", "sd-server.exe", "sd-cli", "sd-cli.exe", "ffmpeg", "ffmpeg.exe"];
+    let sys = System::new_all();
+    for proc in sys.processes().values() {
+        let name = proc.name().to_string_lossy();
+        let named = names.iter().any(|n| name.eq_ignore_ascii_case(n));
+        let parent = proc.parent().map(|p| p.as_u32());
+        if named && parent == Some(self_pid) {
+            let _ = proc.kill();
+        }
+    }
+}
+
+/// 先记下正在退出，取出聊天 pid。调用方接着结束引擎，关窗口时就不再隐藏。
+fn arm_quit(state: &AppState) -> Option<u32> {
+    state.quitting.store(true, Ordering::SeqCst);
+    state.chat_gen.fetch_add(1, Ordering::SeqCst);
+    let pid = state.chat_pid.lock().unwrap().take();
+    *state.chat_running.lock().unwrap() = false;
+    pid
+}
+
+/// 托盘左键抬起才恢复窗口。右键留给菜单，不能在弹出菜单期间把主窗口抢到前台。
+fn tray_click_restores_window(button_is_left: bool, button_is_up: bool) -> bool {
+    button_is_left && button_is_up
+}
+
+fn begin_tray_quit(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        let pid = arm_quit(&state);
+        stop_our_llama(pid);
+        stop_direct_child_tools();
+    }
+    // Windows 上这个回调跑在 TrackPopupMenu 的嵌套消息循环里。
+    // app.exit 只是投递 RequestExit；外层循环要等「不在处理事件」才会退出，
+    // 而退出本身不会再投递唤醒消息。先离开弹出菜单，再销毁窗口并退出。
+    // 若事件循环仍不结束，就在主线程清掉托盘后直接结束进程。
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(60));
+        for (_, window) in app.webview_windows() {
+            let _ = window.destroy();
+        }
+        app.exit(0);
+        std::thread::sleep(Duration::from_millis(400));
+        let again = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            again.cleanup_before_exit();
+            std::process::exit(0);
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        std::process::exit(0);
+    });
+}
+
 fn chat_turns_from(message: String, messages: Option<Vec<ChatIn>>) -> Result<Vec<chat_proto::ChatTurn>, String> {
     if let Some(list) = messages {
         if !list.is_empty() {
@@ -1787,7 +1844,9 @@ fn hide_on_close(tray_enabled: bool, quitting: bool) -> bool {
 
 #[cfg(test)]
 mod tray_tests {
-    use super::hide_on_close;
+    use super::{arm_quit, hide_on_close, tray_click_restores_window, AppState};
+    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
 
     #[test]
     fn quit_is_not_hidden_back_into_the_tray() {
@@ -1795,6 +1854,31 @@ mod tray_tests {
         assert!(!hide_on_close(true, true));
         assert!(!hide_on_close(false, false));
         assert!(!hide_on_close(false, true));
+    }
+
+    #[test]
+    fn arming_quit_happens_before_close_can_hide_the_window() {
+        let state = AppState {
+            chat_running: Mutex::new(true),
+            chat_pid: Mutex::new(Some(42)),
+            chat_gen: std::sync::atomic::AtomicU64::new(3),
+            ..AppState::default()
+        };
+        let pid = arm_quit(&state);
+        assert_eq!(pid, Some(42));
+        assert!(state.quitting.load(Ordering::SeqCst));
+        assert!(!hide_on_close(true, state.quitting.load(Ordering::SeqCst)));
+        assert!(!*state.chat_running.lock().unwrap());
+        assert!(state.chat_pid.lock().unwrap().is_none());
+        assert_eq!(state.chat_gen.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn right_click_does_not_steal_the_tray_menu() {
+        assert!(tray_click_restores_window(true, true));
+        assert!(!tray_click_restores_window(true, false));
+        assert!(!tray_click_restores_window(false, true));
+        assert!(!tray_click_restores_window(false, false));
     }
 }
 
@@ -1880,16 +1964,20 @@ fn main() {
                             let _ = w.eval(format!("document.querySelector('[data-page=\"{}\"]')?.click()", page));
                         }
                     }
-                    "quit" => {
-                        if let Some(state) = app.try_state::<AppState>() {
-                            state.quitting.store(true, Ordering::SeqCst);
-                        }
-                        app.exit(0);
-                    }
+                    "quit" => begin_tray_quit(app),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { .. } = event {
+                    // 右键只打开菜单。对右键也 set_focus 时，Windows 会在
+                    // TrackPopupMenu 里把主窗口激活，菜单命令（包括「退出」）就被收掉。
+                    let (left, up) = match &event {
+                        TrayIconEvent::Click { button, button_state, .. } => (
+                            *button == tauri::tray::MouseButton::Left,
+                            *button_state == tauri::tray::MouseButtonState::Up,
+                        ),
+                        _ => (false, false),
+                    };
+                    if tray_click_restores_window(left, up) {
                         if let Some(w) = tray.app_handle().get_webview_window("main") {
                             let _ = w.show();
                             let _ = w.set_focus();
