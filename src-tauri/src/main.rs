@@ -21,7 +21,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use sysinfo::{Disks, Pid, System};
+use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Pid, RefreshKind, System};
 
 const LLAMA_PORT: u16 = 8080;
 
@@ -55,6 +55,8 @@ fn ensure_dirs() {
 }
 
 // ---------- 硬件 ----------
+const NVIDIA_MISSING: &str = "未检测到 NVIDIA 显卡（CPU 模式可用）";
+
 #[derive(Serialize)]
 struct Hardware {
     cpu: String,
@@ -67,50 +69,99 @@ struct Hardware {
     disk_total_gb: f64,
 }
 
-#[tauri::command]
-fn get_hardware() -> Hardware {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+/// 只要 CPU 名字和内存。不扫进程，也不采 CPU 占用。
+/// 以前 `System::new_all()` 再 `refresh_all()`，等于把全部进程扫两遍，窗口主线程会卡住。
+fn hardware_refresh_kind() -> RefreshKind {
+    RefreshKind::new()
+        .with_memory(MemoryRefreshKind::new().with_ram())
+        .with_cpu(CpuRefreshKind::new())
+}
+
+fn gb(bytes: u64) -> f64 {
+    bytes as f64 / 1024.0 / 1024.0 / 1024.0
+}
+
+fn read_host_machine() -> Hardware {
+    let sys = System::new_with_specifics(hardware_refresh_kind());
     let cpu = sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_default();
-    let total = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
-    let avail = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
     let disks = Disks::new_with_refreshed_list();
-    let free = disks.iter().map(|d| d.available_space()).max().unwrap_or(0) as f64
-        / 1024.0 / 1024.0 / 1024.0;
-    let disk_total = disks.iter().map(|d| d.total_space()).max().unwrap_or(0) as f64
-        / 1024.0 / 1024.0 / 1024.0;
-    // 显卡：Windows 下用 nvidia-smi，有就显示，没有就写“未检测到 NVIDIA 显卡”。
-    let gpu = Command::new("nvidia-smi")
-        .args(["--query-gpu=name", "--format=csv,noheader"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
-        })
-        .unwrap_or_else(|| "未检测到 NVIDIA 显卡（CPU 模式可用）".to_string());
-    let gpu_vram_gb = Command::new("nvidia-smi")
-        .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .parse::<f64>()
-                .ok()
-                .map(|mib| mib / 1024.0)
-        })
-        .unwrap_or(0.0);
+    let free = disks.iter().map(|d| d.available_space()).max().unwrap_or(0);
+    let disk_total = disks.iter().map(|d| d.total_space()).max().unwrap_or(0);
     Hardware {
         cpu,
         cpu_count: sys.cpus().len(),
-        memory_gb: avail,
-        memory_total_gb: total,
-        disk_free_gb: free,
-        gpu,
-        gpu_vram_gb,
-        disk_total_gb: disk_total,
+        memory_gb: gb(sys.available_memory()),
+        memory_total_gb: gb(sys.total_memory()),
+        disk_free_gb: gb(free),
+        gpu: NVIDIA_MISSING.to_string(),
+        gpu_vram_gb: 0.0,
+        disk_total_gb: gb(disk_total),
     }
+}
+
+/// 一次 nvidia-smi 同时取出名字和显存。单卡时和以前分两次查询的结果相同。
+fn parse_nvidia_smi_csv(stdout: &str) -> Option<(String, f64)> {
+    let mut names = Vec::new();
+    let mut mems = Vec::new();
+    for raw in stdout.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, mem)) = line.split_once(',') else {
+            continue;
+        };
+        let name = name.trim();
+        let mem = mem.trim();
+        if name.is_empty() || mem.parse::<f64>().is_err() {
+            continue;
+        }
+        names.push(name.to_string());
+        mems.push(mem.to_string());
+    }
+    if names.is_empty() {
+        return None;
+    }
+    // 多卡时两行内存数字拼不成一个 f64，和以前整段解析失败一样，记成 0。
+    let gpu_vram_gb = mems.join("\n").parse::<f64>().ok().map(|mib| mib / 1024.0).unwrap_or(0.0);
+    Some((names.join("\n"), gpu_vram_gb))
+}
+
+fn query_nvidia_gpu() -> (String, f64) {
+    let mut cmd = Command::new("nvidia-smi");
+    cmd.args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW，避免启动时闪一下控制台
+    }
+    let Ok(output) = cmd.output() else {
+        return (NVIDIA_MISSING.to_string(), 0.0);
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_nvidia_smi_csv(&text).unwrap_or_else(|| (NVIDIA_MISSING.to_string(), 0.0))
+}
+
+fn read_hardware() -> Hardware {
+    std::thread::scope(|scope| {
+        let gpu_task = scope.spawn(query_nvidia_gpu);
+        let mut hw = read_host_machine();
+        let (gpu, gpu_vram_gb) = gpu_task.join().unwrap_or_else(|_| (NVIDIA_MISSING.to_string(), 0.0));
+        hw.gpu = gpu;
+        hw.gpu_vram_gb = gpu_vram_gb;
+        hw
+    })
+}
+
+#[tauri::command]
+async fn get_hardware() -> Hardware {
+    // 同步命令跑在窗口主线程上。硬件检测改到阻塞线程，首屏才能点。
+    tauri::async_runtime::spawn_blocking(read_hardware)
+        .await
+        .unwrap()
 }
 
 fn parse_scale(params: &str) -> Option<(f64, f64)> {
@@ -226,9 +277,8 @@ fn get_catalog() -> Vec<CatalogModel> {
     catalog()
 }
 
-#[tauri::command]
-fn get_catalog_with_fit() -> Vec<serde_json::Value> {
-    let hw = get_hardware();
+fn catalog_with_fit() -> Vec<serde_json::Value> {
+    let hw = read_hardware();
     catalog()
         .iter()
         .map(|m| {
@@ -239,6 +289,13 @@ fn get_catalog_with_fit() -> Vec<serde_json::Value> {
             })
         })
         .collect()
+}
+
+#[tauri::command]
+async fn get_catalog_with_fit() -> Vec<serde_json::Value> {
+    tauri::async_runtime::spawn_blocking(catalog_with_fit)
+        .await
+        .unwrap()
 }
 
 const HF_UA: &str = "OpenLoc/0.1";
@@ -620,8 +677,7 @@ fn import_engine_zip(path: String) -> Result<String, String> {
     }
 }
 
-#[tauri::command]
-fn list_local_models() -> Vec<String> {
+fn list_local_models_sync() -> Vec<String> {
     ensure_dirs();
     fs::read_dir(models_dir())
         .map(|rd| {
@@ -631,6 +687,13 @@ fn list_local_models() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[tauri::command]
+async fn list_local_models() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(list_local_models_sync)
+        .await
+        .unwrap()
 }
 
 #[tauri::command]
@@ -1037,7 +1100,7 @@ fn cancel_chat(state: tauri::State<AppState>) -> String {
 }
 
 #[tauri::command]
-fn get_chat_status(state: tauri::State<AppState>) -> serde_json::Value {
+async fn get_chat_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let port = *state.chat_port.lock().unwrap();
     let model = state.chat_model.lock().unwrap().clone();
     let pid = *state.chat_pid.lock().unwrap();
@@ -1049,16 +1112,23 @@ fn get_chat_status(state: tauri::State<AppState>) -> serde_json::Value {
         } else {
             format!("未运行。上次选择的模型：{model}。下一步：打开「运行」页重新启动。")
         };
-        return serde_json::json!({
+        return Ok(serde_json::json!({
             "running": false,
             "model": model,
             "port": port,
             "host": host,
             "detail": detail,
-        });
+        }));
     }
-    let alive = pid_alive(pid.unwrap_or(0));
-    let health_ok = alive && chat_proto::probe_health_blocking(port, Duration::from_millis(1200)).is_ok();
+    let pid_n = pid.unwrap_or(0);
+    // 进程枚举和健康检查会卡住。放到阻塞线程，避免每 4 秒把窗口冻住。
+    let (alive, health_ok) = tauri::async_runtime::spawn_blocking(move || {
+        let alive = pid_alive(pid_n);
+        let health_ok = alive && chat_proto::probe_health_blocking(port, Duration::from_millis(1200)).is_ok();
+        (alive, health_ok)
+    })
+    .await
+    .map_err(|err| err.to_string())?;
     let running = chat_proto::ready_to_mark_running(alive, health_ok);
     *state.chat_running.lock().unwrap() = running;
     let detail = if running {
@@ -1068,13 +1138,13 @@ fn get_chat_status(state: tauri::State<AppState>) -> serde_json::Value {
     } else {
         format!("进程还在，但 127.0.0.1:{port} 健康检查未通过。下一步：看 data/logs/llama-server.log，或停止后重新启动。本次状态已改为未运行。")
     };
-    serde_json::json!({
+    Ok(serde_json::json!({
         "running": running,
         "model": model,
         "port": port,
         "host": host,
         "detail": detail,
-    })
+    }))
 }
 #[tauri::command]
 fn open_folder(path: String) -> Result<String, String> {
@@ -1120,9 +1190,15 @@ fn stop_process(name: String) -> Result<String, String> {
     if n == 0 { return Err(format!("{} 没有在运行", name)); }
     Ok(format!("已停止 {}（{} 个进程）", name, n))
 }
-#[tauri::command]
-fn engine_status() -> serde_json::Value {
+fn engine_status_sync() -> serde_json::Value {
     serde_json::json!({"llama": find_llama_server().map(|p| p.to_string_lossy().to_string()), "sd": find_sd_cli().map(|p| p.to_string_lossy().to_string())})
+}
+
+#[tauri::command]
+async fn engine_status() -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(engine_status_sync)
+        .await
+        .unwrap()
 }
 
 // ---------- 画图 / 视频 ----------
@@ -1245,8 +1321,7 @@ fn search_hf(
         .map_err(|e| format!("搜索失败：{e}"))?;
     Ok(parse_hf_search(&v))
 }
-#[tauri::command]
-fn list_local_model_info() -> Vec<serde_json::Value> {
+fn list_local_model_info_sync() -> Vec<serde_json::Value> {
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(models_dir()) {
         for e in rd.flatten() {
@@ -1257,6 +1332,13 @@ fn list_local_model_info() -> Vec<serde_json::Value> {
     }
     out.sort_by(|a,b| a["name"].as_str().cmp(&b["name"].as_str()));
     out
+}
+
+#[tauri::command]
+async fn list_local_model_info() -> Vec<serde_json::Value> {
+    tauri::async_runtime::spawn_blocking(list_local_model_info_sync)
+        .await
+        .unwrap()
 }
 
 
@@ -1539,6 +1621,80 @@ fn fallback_o_icon() -> tauri::image::Image<'static> {
         }
     }
     tauri::image::Image::new_owned(rgba, N, N)
+}
+
+#[cfg(test)]
+mod startup_probe_tests {
+    use super::*;
+
+    #[test]
+    fn hardware_probe_skips_process_list_and_cpu_usage() {
+        let kind = hardware_refresh_kind();
+        assert!(kind.processes().is_none());
+        let cpu = kind.cpu().expect("需要 CPU 名字");
+        assert!(!cpu.cpu_usage());
+        assert!(!cpu.frequency());
+        let memory = kind.memory().expect("需要内存");
+        assert!(memory.ram());
+        assert!(!memory.swap());
+    }
+
+    #[test]
+    fn nvidia_csv_matches_the_old_split_queries_for_one_gpu() {
+        let (name, vram) = parse_nvidia_smi_csv("NVIDIA GeForce RTX 3060, 12288\r\n").unwrap();
+        assert_eq!(name, "NVIDIA GeForce RTX 3060");
+        assert!((vram - 12288.0 / 1024.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nvidia_csv_keeps_every_name_and_drops_unparsable_multi_gpu_vram() {
+        let stdout = "NVIDIA GeForce RTX 3060, 12288\nNVIDIA GeForce RTX 3050, 8192\n";
+        let (name, vram) = parse_nvidia_smi_csv(stdout).unwrap();
+        assert_eq!(name, "NVIDIA GeForce RTX 3060\nNVIDIA GeForce RTX 3050");
+        assert_eq!(vram, 0.0);
+    }
+
+    #[test]
+    fn nvidia_csv_ignores_blank_and_non_csv_lines() {
+        assert!(parse_nvidia_smi_csv("").is_none());
+        assert!(parse_nvidia_smi_csv("NVIDIA-SMI has failed\n").is_none());
+        let (name, vram) = parse_nvidia_smi_csv("\nNVIDIA A100-SXM4-80GB, 81920\n").unwrap();
+        assert_eq!(name, "NVIDIA A100-SXM4-80GB");
+        assert!((vram - 80.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn host_numbers_match_a_full_scan() {
+        let fast = read_host_machine();
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let cpu = sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_default();
+        assert_eq!(fast.cpu, cpu);
+        assert_eq!(fast.cpu_count, sys.cpus().len());
+        assert!(fast.cpu_count > 0);
+        let total = gb(sys.total_memory());
+        let avail = gb(sys.available_memory());
+        assert!((fast.memory_total_gb - total).abs() < 0.05, "{} vs {}", fast.memory_total_gb, total);
+        assert!((fast.memory_gb - avail).abs() < 1.0, "{} vs {}", fast.memory_gb, avail);
+        let disks = Disks::new_with_refreshed_list();
+        let free = gb(disks.iter().map(|d| d.available_space()).max().unwrap_or(0));
+        let disk_total = gb(disks.iter().map(|d| d.total_space()).max().unwrap_or(0));
+        assert!((fast.disk_free_gb - free).abs() < 2.0, "{} vs {}", fast.disk_free_gb, free);
+        assert!((fast.disk_total_gb - disk_total).abs() < 0.05, "{} vs {}", fast.disk_total_gb, disk_total);
+        assert_eq!(fast.gpu, NVIDIA_MISSING);
+        assert_eq!(fast.gpu_vram_gb, 0.0);
+    }
+
+    #[test]
+    fn missing_nvidia_smi_keeps_the_cpu_fallback_sentence() {
+        let spawned = Command::new("nvidia-smi").arg("--version").output();
+        if spawned.is_ok() {
+            return;
+        }
+        let (name, vram) = query_nvidia_gpu();
+        assert_eq!(name, NVIDIA_MISSING);
+        assert_eq!(vram, 0.0);
+    }
 }
 
 #[cfg(test)]
