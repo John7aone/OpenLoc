@@ -151,6 +151,14 @@ pub fn normalize_messages(input: Vec<(String, String)>) -> Result<Vec<ChatTurn>,
     Ok(out)
 }
 
+/// 一轮回答的上限。不传时 llama-server 的 n_predict 是 -1，思考模型会一直写到上下文耗尽。
+pub const DEFAULT_MAX_TOKENS: u32 = 1024;
+/// 略高于 1，用来压住「同一段话再来一遍」。1.0 表示关闭，这是 llama-server 的默认值。
+pub const DEFAULT_REPEAT_PENALTY: f64 = 1.1;
+pub const DEFAULT_REPEAT_LAST_N: i32 = 256;
+/// 思考段的 token 预算。到点后由模型模板自己的结束标记收束，再生成正文。
+pub const DEFAULT_REASONING_BUDGET: i32 = 128;
+
 pub fn chat_body(messages: &[ChatTurn], think: bool, stream: bool) -> Value {
     let msgs: Vec<Value> = messages
         .iter()
@@ -161,11 +169,31 @@ pub fn chat_body(messages: &[ChatTurn], think: bool, stream: bool) -> Value {
         "messages": msgs,
         "temperature": 0.7,
         "stream": stream,
+        "max_tokens": DEFAULT_MAX_TOKENS,
+        "repeat_penalty": DEFAULT_REPEAT_PENALTY,
+        "repeat_last_n": DEFAULT_REPEAT_LAST_N,
+        // 必须显式传 true/false。不传时 b12110 的 --reasoning auto 会按模板自己打开思考，
+        // Qwen3.5 会停在未闭合的思考段里，把同一句问候改写很多遍，正文一直出不来。
+        "chat_template_kwargs": {"enable_thinking": think},
     });
     if think {
-        body["chat_template_kwargs"] = serde_json::json!({"enable_thinking": true});
+        body["reasoning_budget_tokens"] = serde_json::json!(DEFAULT_REASONING_BUDGET);
     }
     body
+}
+
+/// 引擎不认识上限、防复读或思考字段时的退路。不再打开思考，避免没有结束标记的长生成。
+fn chat_body_fallback(messages: &[ChatTurn], stream: bool) -> Value {
+    let msgs: Vec<Value> = messages
+        .iter()
+        .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
+        .collect();
+    serde_json::json!({
+        "model": "local",
+        "messages": msgs,
+        "temperature": 0.7,
+        "stream": stream,
+    })
 }
 
 pub fn health_url(port: u16) -> String {
@@ -186,6 +214,9 @@ pub fn launch_args(model: &std::path::Path, port: u16, ctx: u32) -> Vec<String> 
         port.to_string(),
         "-c".to_string(),
         ctx.to_string(),
+        // 用 GGUF 里自带的 jinja chat template，结束标记跟着模型走。
+        // 不传 --chat-template，避免用一套通用模板盖掉模型自己的。
+        "--jinja".to_string(),
     ]
 }
 
@@ -311,10 +342,10 @@ pub fn extract_completion(v: &Value) -> String {
 
 pub fn complete_chat(port: u16, messages: &[ChatTurn], think: bool) -> Result<String, String> {
     let client = http_client(Duration::from_secs(300))?;
-    let first = post_blocking(&client, port, messages, think, false)?;
-    let resp = if first.status().as_u16() == 400 && think {
+    let first = post_blocking(&client, port, &chat_body(messages, think, false))?;
+    let resp = if first.status().as_u16() == 400 {
         let _ = first.text().unwrap_or_default();
-        post_blocking(&client, port, messages, false, false)?
+        post_blocking(&client, port, &chat_body_fallback(messages, false))?
     } else {
         first
     };
@@ -338,14 +369,12 @@ pub fn complete_chat(port: u16, messages: &[ChatTurn], think: bool) -> Result<St
 fn post_blocking(
     client: &reqwest::blocking::Client,
     port: u16,
-    messages: &[ChatTurn],
-    think: bool,
-    stream: bool,
+    body: &Value,
 ) -> Result<reqwest::blocking::Response, String> {
     client
         .post(chat_url(port))
         .header("User-Agent", "OpenLoc")
-        .json(&chat_body(messages, think, stream))
+        .json(body)
         .send()
         .map_err(|e| map_transport_error(&e, port))
 }
@@ -365,18 +394,22 @@ pub async fn open_and_read_stream(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         .connect_timeout(Duration::from_secs(3))
+        .pool_max_idle_per_host(0)
+        .tcp_nodelay(true)
         .build()
         .map_err(|e| err_request(&e.to_string()))?;
-    let first = post_async(&client, port, messages, think, true).await?;
-    let (resp, note) = if first.status().as_u16() == 400 && think {
+    let first = post_async(&client, port, &chat_body(messages, think, true)).await?;
+    let (resp, note) = if first.status().as_u16() == 400 {
         let _ = first.text().await.unwrap_or_default();
-        let again = post_async(&client, port, messages, false, true).await?;
-        (
-            again,
+        let again = post_async(&client, port, &chat_body_fallback(messages, true)).await?;
+        let note = if think {
             Some(
                 "思考开关未被当前引擎接受，这次按普通对话发送，没有编造思考过程。".to_string(),
-            ),
-        )
+            )
+        } else {
+            None
+        };
+        (again, note)
     } else {
         (first, None)
     };
@@ -392,16 +425,31 @@ pub async fn open_and_read_stream(
     let mut parser = SseParser::default();
     let mut cancelled = false;
     let mut resp = resp;
-    while let Some(chunk) = resp.chunk().await.map_err(|e| map_transport_error(&e, port))? {
+    loop {
         if stop() {
             cancelled = true;
             break;
         }
-        let text = String::from_utf8_lossy(&chunk);
-        for piece in parser.push(&text) {
-            on_piece(piece);
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let text = String::from_utf8_lossy(&chunk);
+                for piece in parser.push(&text) {
+                    on_piece(piece);
+                }
+            }
+            Ok(None) => break,
+            Err(err) => {
+                if stop() {
+                    cancelled = true;
+                    break;
+                }
+                drop(resp);
+                return Err(map_transport_error(&err, port));
+            }
         }
     }
+    // 丢掉响应会关掉这条连接。llama-server 看到断开后会取消槽位里的生成。
+    drop(resp);
     if !cancelled {
         for piece in parser.finish()? {
             on_piece(piece);
@@ -413,14 +461,12 @@ pub async fn open_and_read_stream(
 async fn post_async(
     client: &reqwest::Client,
     port: u16,
-    messages: &[ChatTurn],
-    think: bool,
-    stream: bool,
+    body: &Value,
 ) -> Result<reqwest::Response, String> {
     client
         .post(chat_url(port))
         .header("User-Agent", "OpenLoc")
-        .json(&chat_body(messages, think, stream))
+        .json(body)
         .send()
         .await
         .map_err(|e| map_transport_error(&e, port))
@@ -439,7 +485,8 @@ mod tests {
     fn launch_and_urls_stay_on_loopback() {
         let args = launch_args(std::path::Path::new("demo.gguf"), 18080, 4096);
         assert!(args.windows(2).any(|w| w == ["--host", "127.0.0.1"]));
-        assert!(!args.iter().any(|a| a == "0.0.0.0" || a == "localhost"));
+        assert!(args.iter().any(|a| a == "--jinja"));
+        assert!(!args.iter().any(|a| a == "--no-jinja" || a == "--chat-template" || a == "0.0.0.0" || a == "localhost"));
         assert!(health_url(8080).starts_with("http://127.0.0.1:8080/"));
         assert!(chat_url(8080).contains("127.0.0.1"));
         assert!(!chat_url(8080).contains("0.0.0.0"));
@@ -509,17 +556,30 @@ mod tests {
     }
 
     #[test]
-    fn think_flag_is_omitted_unless_asked() {
+    fn think_flag_and_limits_are_explicit() {
         let turns = vec![ChatTurn {
             role: "user".into(),
             content: "hi".into(),
         }];
         let off = chat_body(&turns, false, true);
-        assert!(off.get("chat_template_kwargs").is_none());
+        assert_eq!(off["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(off.get("reasoning_budget_tokens").is_none());
         assert_eq!(off["stream"], true);
+        assert_eq!(off["max_tokens"], DEFAULT_MAX_TOKENS);
+        assert!(off["max_tokens"].as_u64().unwrap() > 0);
+        assert!(off["max_tokens"].as_u64().unwrap() < 100_000);
+        assert!(off["repeat_penalty"].as_f64().unwrap() > 1.0);
+        assert!(off["repeat_last_n"].as_i64().unwrap() > 0);
         let on = chat_body(&turns, true, false);
         assert_eq!(on["chat_template_kwargs"]["enable_thinking"], true);
+        let budget = on["reasoning_budget_tokens"].as_i64().unwrap();
+        assert!(budget > 0 && budget < 4096, "{budget}");
         assert_eq!(on["messages"][0]["content"], "hi");
+        assert!(on.get("stop").is_none(), "结束标记交给模型模板，不写死一套 stop");
+        let legacy = chat_body_fallback(&turns, false);
+        assert!(legacy.get("chat_template_kwargs").is_none());
+        assert!(legacy.get("max_tokens").is_none());
+        assert!(legacy.get("reasoning_budget_tokens").is_none());
     }
 
     #[test]
@@ -605,6 +665,17 @@ mod tests {
     }
 
     #[test]
+    fn complete_chat_falls_back_when_limits_are_rejected() {
+        let port = serve(vec![
+            (400, r#"{"error":{"message":"unknown field repeat_penalty"}}"#),
+            (200, r#"{"choices":[{"message":{"content":"还能回答"}}]}"#),
+        ]);
+        let turns = normalize_messages(vec![("user".into(), "你好".into())]).unwrap();
+        let text = complete_chat(port, &turns, false).unwrap();
+        assert_eq!(text, "还能回答");
+    }
+
+    #[test]
     fn complete_chat_refused_port_is_a_clear_error() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -639,6 +710,89 @@ mod tests {
         let text = complete_chat(port, &turns, false).expect("对话");
         assert!(!text.trim().is_empty(), "真实模型返回空内容");
         eprintln!("LIVE_REPLY={}", text.replace('\n', " "));
+    }
+
+    fn repetition_of(text: &str, window: usize) -> usize {
+        let chars: Vec<char> = text.chars().collect();
+        if chars.len() < window {
+            return 1;
+        }
+        let mut best = 1usize;
+        let mut i = 0;
+        while i + window <= chars.len() && i < 800 {
+            let needle: String = chars[i..i + window].iter().collect();
+            let count = text.matches(needle.as_str()).count();
+            if count > best {
+                best = count;
+            }
+            i += window;
+        }
+        best
+    }
+
+    #[test]
+    fn live_greeting_ends_once() {
+        let Ok(port_text) = std::env::var("OPENLOC_LIVE_PORT") else {
+            return;
+        };
+        let port: u16 = port_text.parse().expect("OPENLOC_LIVE_PORT");
+        probe_health_blocking(port, Duration::from_secs(5)).expect("健康检查");
+        let turns = normalize_messages(vec![("user".into(), "你好啊".into())]).unwrap();
+        for think in [false, true] {
+            let text = complete_chat(port, &turns, think).expect("对话");
+            let trimmed = text.trim();
+            eprintln!(
+                "LIVE_GREETING think={think} chars={} reps={} text={}",
+                trimmed.chars().count(),
+                repetition_of(trimmed, 12),
+                trimmed.replace('\n', " ")
+            );
+            assert!(!trimmed.is_empty(), "你好啊 返回空内容 think={think}");
+            assert!(
+                trimmed.chars().count() < 800,
+                "你好啊 没有在合理长度内结束 think={think}: {trimmed}"
+            );
+            assert!(
+                repetition_of(trimmed, 12) < 3,
+                "你好啊 在复读 think={think}: {trimmed}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn live_greeting_stream_ends_once() {
+        let Ok(port_text) = std::env::var("OPENLOC_LIVE_PORT") else {
+            return;
+        };
+        let port: u16 = port_text.parse().expect("OPENLOC_LIVE_PORT");
+        let turns = normalize_messages(vec![("user".into(), "你好啊".into())]).unwrap();
+        let mut text = String::new();
+        let mut reason = String::new();
+        let outcome = open_and_read_stream(
+            port,
+            &turns,
+            false,
+            || false,
+            |_| {},
+            |piece| match piece {
+                SsePiece::Delta(part) => text.push_str(&part),
+                SsePiece::Reasoning(part) => reason.push_str(&part),
+                SsePiece::Done => {}
+            },
+        )
+        .await
+        .expect("流式对话");
+        let all = format!("{reason}{text}");
+        eprintln!(
+            "LIVE_GREETING_STREAM chars={} reps={} text={}",
+            all.chars().count(),
+            repetition_of(&all, 16),
+            all.replace('\n', " ")
+        );
+        assert!(!outcome.cancelled);
+        assert!(!text.trim().is_empty(), "流式正文是空的: {all}");
+        assert!(all.chars().count() < 4000, "流式回复没有结束: {all}");
+        assert!(repetition_of(&all, 16) < 3, "流式回复在复读: {all}");
     }
 
     #[tokio::test]
@@ -707,5 +861,77 @@ mod tests {
         .unwrap();
         assert!(outcome.cancelled, "流没有在第二段停下");
         assert_eq!(got, vec![SsePiece::Delta("甲".into())]);
+    }
+
+    #[tokio::test]
+    async fn cancel_closes_the_server_connection() {
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let closed = Arc::new(AtomicBool::new(false));
+        let flag = closed.clone();
+        thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let _ = sock.set_nodelay(true);
+            let _ = sock.set_read_timeout(Some(Duration::from_millis(800)));
+            let _ = sock.set_write_timeout(Some(Duration::from_millis(400)));
+            let mut buf = [0u8; 8192];
+            let _ = sock.read(&mut buf);
+            let part = "data: {\"choices\":[{\"delta\":{\"content\":\"甲\"}}]}\n\n";
+            let head = format!("{:x}\r\n", part.len());
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{head}{part}\r\n"
+            );
+            sock.write_all(resp.as_bytes()).unwrap();
+            // 等客户端处理完第一段并丢掉连接。之后继续写，直到对端不再接收。
+            thread::sleep(Duration::from_millis(200));
+            let _ = sock.set_write_timeout(Some(Duration::from_millis(200)));
+            let buf = vec![b'x'; 64 * 1024];
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let mut wrote = 0usize;
+            let mut stopped = false;
+            while std::time::Instant::now() < deadline {
+                match sock.write(&buf) {
+                    Ok(0) => {
+                        stopped = true;
+                        break;
+                    }
+                    Ok(n) => wrote += n,
+                    Err(_) => {
+                        stopped = true;
+                        break;
+                    }
+                }
+            }
+            // 内核发送缓冲能吞下几百 KB。停住之后不应还能连续写很多兆。
+            flag.store(stopped && wrote < 6 * 1024 * 1024, AtomicOrdering::SeqCst);
+        });
+        let turns = normalize_messages(vec![("user".into(), "问".into())]).unwrap();
+        let seen = Arc::new(AtomicBool::new(false));
+        let seen_stop = seen.clone();
+        let seen_piece = seen.clone();
+        let outcome = open_and_read_stream(
+            port,
+            &turns,
+            false,
+            || seen_stop.load(AtomicOrdering::SeqCst),
+            |_| {},
+            |piece| {
+                if matches!(piece, SsePiece::Delta(_)) {
+                    seen_piece.store(true, AtomicOrdering::SeqCst);
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert!(outcome.cancelled, "已经收到一段后没有停");
+        let wait_started = std::time::Instant::now();
+        while !closed.load(AtomicOrdering::SeqCst) && wait_started.elapsed() < Duration::from_secs(3) {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            closed.load(AtomicOrdering::SeqCst),
+            "停止后连接还在，服务端仍能继续把生成内容写出去"
+        );
     }
 }
